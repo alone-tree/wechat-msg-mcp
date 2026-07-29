@@ -1,0 +1,18 @@
+git add README.md# 敏感数据
+keys.json
+decrypted/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.python-version
+
+# uv
+uv.lock
+
+# IDE
+.DS_Store
+.idea/
+.vscode/

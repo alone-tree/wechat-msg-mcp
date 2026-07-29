@@ -1,0 +1,65 @@
+{
+  "bizchat/bizchat.db": {
+    "enc_key": "fd9b67a85b096b020282a1c088af491c8f1807431f6365b0feb5b961b0003ae8"
+  },
+  "contact/contact.db": {
+    "enc_key": "9cbc60ee19fe71711a7e81818981acfcae6ba14c26dbc64f1052b758986a50c3"
+  },
+  "emoticon/emoticon.db": {
+    "enc_key": "2317aab021f1c495cb176e480981298ae5c7ce0bfdb33e4f079e7841271def2f"
+  },
+  "favorite/favorite.db": {
+    "enc_key": "fcd084c987e6b5580d0fd91fbe526aa0e843b6f4b9251e51bbb7169b20d5d6b5"
+  },
+  "general/general.db": {
+    "enc_key": "1a7b8dc9021eb9dc5917cd533a63fabca5d653b45547b70c80cfe26523ea2b5c"
+  },
+  "hardlink/hardlink.db": {
+    "enc_key": "8178d694aeae36f2a531e0b980163d7a04f539f164eb4e8b4665beb1e30f889c"
+  },
+  "head_image/head_image.db": {
+    "enc_key": "a8ab9f089e19966bd50ddef7febcbe36361f9102c83035b3a810faced8200b37"
+  },
+  "message/biz_message_0.db": {
+    "enc_key": "52de285a75e401737d3e556ffaa855feb8ba58b501c89ebb566f347ccad7e13d"
+  },
+  "message/biz_message_1.db": {
+    "enc_key": "da5110c59e223e69a7cdf65e05a9c52d7dcbfc2b7a3fc7f73ca45c2a3cacc866"
+  },
+  "message/biz_message_2.db": {
+    "enc_key": "338c67e093d1564d73c9bb6c920c0e47178534d2b27fc9b48b014df34ef02a44"
+  },
+  "message/biz_message_3.db": {
+    "enc_key": "768e36f2ae7663b23490c80f6338cab4178793b5071323beb1e1c39c6dd35824"
+  },
+  "message/biz_message_4.db": {
+    "enc_key": "76db31a25f14324c1f81dec53e87e183ee848e759bc09517f80270a9d988201d"
+  },
+  "message/media_0.db": {
+    "enc_key": "fa9dced1647b5bfd8a2df2288cdc1611faa282d2a0277862bc9fe5280ee7e6db"
+  },
+  "message/message_0.db": {
+    "enc_key": "7c796092e77b9b8d21caf38c09bc8678bac0e7dad8dc5cd3bc995eb0d6f688ba"
+  },
+  "message/message_1.db": {
+    "enc_key": "0f43cd07c5f19e010a257249c83acc5c9257d941b1f25ae13a41d3972ae54972"
+  },
+  "message/message_2.db": {
+    "enc_key": "44ded7492f2ffc0d6aa95df0167973d45e312190ead2a3399857368454f64955"
+  },
+  "message/message_3.db": {
+    "enc_key": "394b5d6c970613bcb878a7ffd9692912a32196055d5fcc2ed2d9bfa9d3a6d103"
+  },
+  "message/message_4.db": {
+    "enc_key": "99448978e75818c423adf9a7e776fea2eb594a59183e50cd638e8c3824eea828"
+  },
+  "message/message_resource.db": {
+    "enc_key": "411ae2ea388fe0786055a8522b7266fda41b1289ed834d63e4750cd1ea9d8c18"
+  },
+  "session/session.db": {
+    "enc_key": "9c4ef770adaadece75da6df8faabe3d907022bf567e966083622a4e9d1bae13a"
+  },
+  "sns/sns.db": {
+    "enc_key": "579456f53acf22ecf02e37d55c4f92cc76b527110048091e07e5f0328e09dda3"
+  }
+}
