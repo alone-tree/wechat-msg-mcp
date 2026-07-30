@@ -2,6 +2,7 @@
 微信聊天记录 MCP Server 主入口
 """
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -57,118 +58,32 @@ mcp = FastMCP(
 # 延迟初始化 Reader（避免启动时报错中断 MCP 握手）
 _reader: Optional[WeChatDBReader] = None
 _last_sync_time: float = 0
-_SYNC_INTERVAL = float('inf')  # 禁用自动同步，避免覆盖损坏解密文件
-
-
-def _copy_with_wal_checkpoint(src_path: Path, tmp_dir: Path) -> Path:
-    """
-    将源 db（及其 WAL/SHM）复制到临时目录，然后用 SQLite 做
-    PRAGMA wal_checkpoint(TRUNCATE) 把 WAL 内容合并进主文件，
-    返回合并后的临时 db 路径（可安全传给 decrypt_database）。
-    """
-    import shutil, sqlite3 as _sqlite3
-
-    tmp_db = tmp_dir / src_path.name
-    # 复制主文件
-    shutil.copy2(src_path, tmp_db)
-    # 复制 WAL（如存在）
-    wal_src = Path(str(src_path) + "-wal")
-    if wal_src.exists():
-        shutil.copy2(wal_src, Path(str(tmp_db) + "-wal"))
-    # 复制 SHM（如存在）
-    shm_src = Path(str(src_path) + "-shm")
-    if shm_src.exists():
-        shutil.copy2(shm_src, Path(str(tmp_db) + "-shm"))
-
-    # 用 SQLite 打开临时副本，触发 WAL 自动合并，然后强制 checkpoint
-    # 注意：这些是已加密的 SQLCipher 文件，sqlite3 本身无法读取内容，
-    # 但 SQLite 的 WAL 合并发生在文件层面，不需要解密密钥。
-    # 实际上对加密文件直接 checkpoint 会失败——改为手动合并 WAL 字节。
-    wal_tmp = Path(str(tmp_db) + "-wal")
-    if wal_tmp.exists():
-        _merge_wal_into_db(tmp_db, wal_tmp)
-        # 合并后删除 WAL，避免 decrypt_database 再次读取旧 WAL
-        try:
-            wal_tmp.unlink()
-        except OSError:
-            pass
-        shm_tmp = Path(str(tmp_db) + "-shm")
-        try:
-            shm_tmp.unlink()
-        except OSError:
-            pass
-
-    return tmp_db
-
-
-def _merge_wal_into_db(db_path: Path, wal_path: Path) -> None:
-    """
-    手动将 SQLite WAL 文件的帧写回到主 db 文件。
-    WAL 格式：32字节文件头 + N×(24字节帧头 + page_size字节数据)
-    只取每个 page_no 的最新帧（最后出现的那帧），覆写主 db 对应页。
-    """
-    WAL_HEADER_SIZE = 32
-    WAL_FRAME_HEADER_SIZE = 24
-
-    try:
-        with open(wal_path, "rb") as wf:
-            wal_data = wf.read()
-
-        if len(wal_data) < WAL_HEADER_SIZE:
-            return  # WAL 为空或损坏，跳过
-
-        # 从 WAL 头读取页大小（偏移 8，4字节大端）
-        import struct
-        magic = wal_data[:4]
-        # WAL magic: 0x377f0682 (big-endian) 或 0x377f0683
-        if magic not in (b'\x37\x7f\x06\x82', b'\x37\x7f\x06\x83'):
-            return  # 不是合法 WAL 文件
-
-        page_size = struct.unpack(">I", wal_data[8:12])[0]
-        if page_size == 1:
-            page_size = 65536  # SQLite 特殊值
-
-        frame_size = WAL_FRAME_HEADER_SIZE + page_size
-        offset = WAL_HEADER_SIZE
-
-        # 收集每个页号的最新数据（后出现的帧覆盖前面的）
-        pages: dict[int, bytes] = {}
-        while offset + frame_size <= len(wal_data):
-            frame_header = wal_data[offset: offset + WAL_FRAME_HEADER_SIZE]
-            page_no = struct.unpack(">I", frame_header[:4])[0]  # 1-based
-            page_data = wal_data[offset + WAL_FRAME_HEADER_SIZE: offset + frame_size]
-            if page_no > 0 and len(page_data) == page_size:
-                pages[page_no] = page_data
-            offset += frame_size
-
-        if not pages:
-            return
-
-        # 将收集到的页写回主 db 文件
-        with open(db_path, "r+b") as dbf:
-            for page_no, page_data in pages.items():
-                db_offset = (page_no - 1) * page_size
-                dbf.seek(db_offset)
-                dbf.write(page_data)
-            dbf.flush()
-
-    except Exception:
-        pass  # WAL 合并失败不影响流程，decrypt 会用原始主文件内容
+_SYNC_INTERVAL = 60  # 每分钟最多检查一次；仅当源 db mtime 有变化时才真正解密（开销极小）
+_sync_lock = threading.Lock()  # 防止并发同步写入导致文件损坏
+_db_mtimes: dict[str, float] = {}  # 源 db 路径 -> 上次同步时的 mtime（避免重复解密）
 
 
 def _auto_sync_decrypt() -> None:
     """
-    增量解密：检测微信原始 db 是否有新数据（包含 WAL），
-    若有则先把 db+WAL 复制到临时目录并手动合并 WAL，
-    再解密合并后的临时文件到 decrypted/ 目录。
+    增量同步：每分钟检查一次，仅对源文件 mtime 有变化的 message db 重新解密。
+    
+    策略：直接解密源文件（不含 WAL），因为微信的 WAL checkpoint 很频繁，
+    绝大部分数据已在主文件中。这样最多丢失最近一次 checkpoint 后的几条消息，
+    但绝不会因 WAL 合并错误导致数据库损坏。
+    
+    contact/session/group 等稳定数据不参与自动同步（手动 decrypt_db.py 一次即可）。
     """
     global _last_sync_time, _reader
 
-    now = time.time()
-    if now - _last_sync_time < _SYNC_INTERVAL:
-        return  # 距上次同步不足间隔，跳过
+    # 获取锁，防止并发同步写入同一文件
+    if not _sync_lock.acquire(blocking=False):
+        return  # 已有同步在进行中，跳过
 
     try:
+        now = time.time()
+        if now - _last_sync_time < _SYNC_INTERVAL:
+            return
+
         import importlib.util, json, shutil, tempfile
         scripts_dir = Path(__file__).parent.parent / "scripts"
         spec = importlib.util.spec_from_file_location(
@@ -180,64 +95,105 @@ def _auto_sync_decrypt() -> None:
         keys_file = Path(__file__).parent.parent / "keys.json"
         if not keys_file.exists():
             return
-
         with open(keys_file) as f:
             keys: dict = json.load(f)
         if not keys:
             return
 
-        if not decrypt_mod.WECHAT_BASE.exists():
-            return
-
+        # 只处理新版路径下的 message db
         all_dbs = decrypt_mod.find_db_for_key("")
-        if not all_dbs:
-            return
-
-        # 只自动同步消息库，contact/session/group 不参与（避免 WAL 合并破坏稳定数据）
         message_dbs = [
             p for p in all_dbs
             if p.parent.name.lower() == "message"
             and p.stat().st_size >= 4096
+            and not p.name.startswith("message_fts")      # 跳过全文索引
+            and not p.name.startswith("message_resource")  # 跳过资源索引
         ]
-        if not message_dbs:
-            return
 
-        with tempfile.TemporaryDirectory(prefix="wechat_wal_") as tmp_dir_str:
+        needs_reload = False
+
+        with tempfile.TemporaryDirectory(prefix="wechat_sync_") as tmp_dir_str:
             tmp_dir = Path(tmp_dir_str)
-            needs_reload = False
 
             for src_path in message_dbs:
-                dst_path = decrypt_mod.build_output_path(src_path)
-
-                # 把源 db + WAL 复制到临时目录并合并 WAL
+                # 按源文件 mtime 判断是否有新数据落盘（微信 checkpoint 后 mtime 才更新）
+                src_key = str(src_path)
                 try:
-                    tmp_db = _copy_with_wal_checkpoint(src_path, tmp_dir)
-                except Exception:
-                    tmp_db = src_path  # 复制失败退回使用原始文件
+                    src_mtime = src_path.stat().st_mtime
+                except OSError:
+                    continue
 
-                # 优先用 salt 匹配找到对应 key，避免遍历所有密钥产生大量错误日志
-                direct_key = decrypt_mod._match_key_by_salt(tmp_db, keys)
-                if direct_key is not None:
-                    if decrypt_mod._try_direct_key(tmp_db, direct_key, dst_path):
-                        needs_reload = True
+                final_path = decrypt_mod.build_output_path(src_path)
+                last_seen = _db_mtimes.get(src_key)
+                if last_seen is None:
+                    # 首次见到：源文件不比已解密产物新，则记录 mtime 并跳过
+                    if final_path.exists() and final_path.stat().st_mtime >= src_mtime:
+                        _db_mtimes[src_key] = src_mtime
                         continue
-                # salt 匹配失败，fallback 到旧版 PBKDF2（静默失败）
-                for key_hex in keys.values():
-                    try:
-                        if decrypt_mod.decrypt_database(tmp_db, key_hex, dst_path, keys, silent=True):
-                            needs_reload = True
-                            break
-                    except Exception:
-                        pass
+                elif src_mtime <= last_seen:
+                    continue  # 无变化，跳过
+
+                tmp_decrypted = tmp_dir / f"decrypted_{src_path.name}"
+
+                # 直接解密源文件（不合并 WAL），解密到临时文件
+                # 源文件本身已包含微信自动 checkpoint 后的大部分数据
+                direct_key = decrypt_mod._match_key_by_salt(src_path, keys)
+                decrypted_ok = False
+                if direct_key is not None:
+                    decrypted_ok = decrypt_mod._try_direct_key(src_path, direct_key, tmp_decrypted)
+                if not decrypted_ok:
+                    for key_hex in keys.values():
+                        try:
+                            if decrypt_mod.decrypt_database(src_path, key_hex, tmp_decrypted, keys, silent=True):
+                                decrypted_ok = True
+                                break
+                        except Exception:
+                            pass
+
+                if not decrypted_ok:
+                    # 失败也记录 mtime：避免永久失败的文件每分钟重试，文件变化时才再试
+                    _db_mtimes[src_key] = src_mtime
+                    continue
+
+                # 验证解密结果
+                try:
+                    import sqlite3 as _sqlite3
+                    uri = f"file:{tmp_decrypted}?mode=ro&immutable=1"
+                    conn = _sqlite3.connect(uri, uri=True)
+                    conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+                    conn.close()
+                except Exception:
+                    _db_mtimes[src_key] = src_mtime  # 同上，验证失败也记录
+                    continue
+
+                # 验证通过，原子替换目标文件
+                final_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.move(str(tmp_decrypted), str(final_path))
+                except OSError:
+                    continue
+
+                # 清理目标文件可能残留的 shm/wal
+                for suffix in ("-shm", "-wal"):
+                    side = Path(str(final_path) + suffix)
+                    if side.exists():
+                        try:
+                            side.unlink()
+                        except OSError:
+                            pass
+
+                _db_mtimes[src_key] = src_mtime  # 记录已同步的 mtime，下次无变化则跳过
+                needs_reload = True
 
         if needs_reload and _reader is not None:
-            # 只重新发现消息 db，不重建整个 reader（避免重载损坏的 contact.db）
             _reader._discover_msg_dbs()
 
         _last_sync_time = now
 
     except Exception:
-        pass  # 自动同步失败不影响正常读取
+        pass  # 同步失败不影响正常读取
+    finally:
+        _sync_lock.release()
 
 
 def _get_reader() -> WeChatDBReader:
@@ -249,10 +205,8 @@ def _get_reader() -> WeChatDBReader:
         if not ready:
             raise RuntimeError(msg)
         _reader = WeChatDBReader(str(decrypted_dir))
-    # 再尝试自动同步解密（仅同步 message 类，不会影响 contact/session）
+    # 同步执行自动解密（完成后 reader 才返回，确保查询期间不会被写入干扰）
     _auto_sync_decrypt()
-    # WAL checkpoint，读取尚未落盘的最新写入
-    _reader.checkpoint_all()
     return _reader
 
 

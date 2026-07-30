@@ -130,7 +130,8 @@ def _try_direct_key(src_path: Path, key_hex: bytes, dst_path: Path) -> bool:
                 out.write(page_data)
 
     try:
-        conn = sqlite3.connect(str(dst_path))
+        uri = f"file:{dst_path}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
         conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         conn.close()
         return True
@@ -300,7 +301,8 @@ def decrypt_database(src_path: Path, key_hex_str: str, dst_path: Path, keys: dic
 
     # 验证解密结果
     try:
-        conn = sqlite3.connect(str(dst_path))
+        uri = f"file:{dst_path}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
         conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         conn.close()
         return True

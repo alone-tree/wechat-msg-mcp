@@ -4,6 +4,7 @@
 """
 import hashlib
 import os
+import re
 import sqlite3
 import zstandard as zstd
 from pathlib import Path
@@ -128,10 +129,16 @@ class WeChatDBReader:
         if not msg_dir.exists():
             return
         # 微信 4.x: message_0.db ~ message_N.db
-        self._msg_db_paths = sorted(msg_dir.glob("message_*.db"))
+        self._msg_db_paths = sorted(
+            p for p in msg_dir.glob("message_*.db")
+            if p.stat().st_size >= 4096  # 跳过空文件或损坏文件
+        )
         if not self._msg_db_paths:
             # 兼容旧版路径 msg_*.db
-            self._msg_db_paths = sorted(msg_dir.glob("msg_*.db"))
+            self._msg_db_paths = sorted(
+                p for p in msg_dir.glob("msg_*.db")
+                if p.stat().st_size >= 4096
+            )
 
     @staticmethod
     def _checkpoint_db(path: Path) -> None:
@@ -155,15 +162,16 @@ class WeChatDBReader:
 
     @staticmethod
     def _open_db(path: Path) -> sqlite3.Connection:
-        """只读方式打开 SQLite 数据库，先清理遗留的 shm/wal 文件避免 malformed 错误"""
-        # 删掉遗留的 shm/wal（自动同步可能留下 0 字节的 wal + 非空 shm，导致 malformed）
+        """以只读方式打开 SQLite 数据库"""
+        # 清理可能残留的 shm/wal 文件（避免损坏的 WAL 影响读取）
         for suffix in ("-shm", "-wal"):
-            side_file = path.with_name(path.name + suffix)
-            if side_file.exists():
+            side = Path(str(path) + suffix)
+            if side.exists():
                 try:
-                    side_file.unlink()
+                    side.unlink()
                 except OSError:
                     pass
+        # mode=ro 只读模式，不会创建新的 shm/wal
         uri = f"file:{path}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
@@ -195,12 +203,14 @@ class WeChatDBReader:
 
     def _parse_group_sender(self, content: str) -> tuple[Optional[str], str]:
         """
-        群消息内容格式：'wxid_xxx:\n实际内容'
+        群消息内容格式：'sender_id:\n实际内容'
+        sender_id 可能是 wxid_xxx、自定义微信号(ke79293823)、或含@的格式
         返回 (sender_id, real_content)
         """
         if "\n" in content:
             first_line, rest = content.split("\n", 1)
-            if first_line.endswith(":") and ("wxid_" in first_line or "@" in first_line):
+            # 匹配 wxid_xxx、自定义微信号(alphanumeric)、或含@的格式
+            if first_line.endswith(":") and re.match(r'^[\w@._-]+$', first_line[:-1]):
                 return first_line[:-1], rest
         return None, content
 
@@ -423,7 +433,7 @@ class WeChatDBReader:
                                origin_source
                         FROM {table_name}
                         WHERE create_time >= ? AND create_time < ?
-                        ORDER BY create_time ASC, local_id ASC
+                        ORDER BY local_id ASC
                         LIMIT ? OFFSET ?""",
                     (start_ts, end_ts, limit, offset),
                 ).fetchall()
@@ -444,11 +454,20 @@ class WeChatDBReader:
                     if is_group and content:
                         extracted_id, content = self._parse_group_sender(content)
                         if extracted_id:
-                            # 有 wxid 前缀 = 别人发的
+                            # 有 sender:\n 前缀 = 别人发的
                             sender_id = extracted_id
                             is_from_me = False
+                        elif local_type and local_type == 10000:
+                            # local_type=10000 是系统消息（入群邀请、安全提醒等），不是任何人发的
+                            sender_id = "[系统消息]"
+                            is_from_me = False
+                        elif content.strip().startswith('<?xml'):
+                            # XML 格式内容（视频、位置、名片等）没有 sender:\n 前缀，
+                            # 用 real_sender_id 判断归属
+                            sender_id = real_sender_id
+                            is_from_me = (self._my_username and real_sender_id == self._my_username)
                         else:
-                            # 无 wxid 前缀 = 自己发的
+                            # 无 sender:\n 前缀且非系统消息、非XML = 自己发的文字消息
                             sender_id = self._my_username or real_sender_id
                             is_from_me = True
                     else:
@@ -539,7 +558,7 @@ class WeChatDBReader:
                                        origin_source
                                 FROM {table_name}
                                 WHERE create_time >= ? AND create_time < ?
-                                ORDER BY create_time DESC
+                                ORDER BY local_id DESC
                                 LIMIT 500""",
                             (start_ts, end_ts),
                         ).fetchall()
@@ -561,6 +580,9 @@ class WeChatDBReader:
                             extracted_id, content = self._parse_group_sender(content)
                             if extracted_id:
                                 sender_id = extracted_id
+                                is_from_me = False
+                            elif local_type and local_type == 10000:
+                                sender_id = "[系统消息]"
                                 is_from_me = False
                             else:
                                 sender_id = self._my_username or real_sender_id
