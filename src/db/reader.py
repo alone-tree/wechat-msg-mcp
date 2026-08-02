@@ -262,7 +262,7 @@ class WeChatDBReader:
             dt_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
             end_ts = int(dt_end.timestamp())
         else:
-            end_ts = int(datetime(9999, 12, 31).timestamp())
+            end_ts = 9999999999  # Windows 不支持 datetime(9999,12,31).timestamp()
 
         return start_ts, end_ts
 
@@ -434,8 +434,8 @@ class WeChatDBReader:
                         FROM {table_name}
                         WHERE create_time >= ? AND create_time < ?
                         ORDER BY local_id ASC
-                        LIMIT ? OFFSET ?""",
-                    (start_ts, end_ts, limit, offset),
+                        LIMIT ?""",
+                    (start_ts, end_ts, limit + offset),  # 多取 offset 条，合并后再裁剪
                 ).fetchall()
 
                 for row in rows:

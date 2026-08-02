@@ -65,7 +65,9 @@ mcp = FastMCP(
 # 延迟初始化 Reader（避免启动时报错中断 MCP 握手）
 _reader: Optional[WeChatDBReader] = None
 _last_sync_time: float = 0
-_SYNC_INTERVAL = 60  # 每分钟最多检查一次；仅当源 db mtime 有变化时才真正解密（开销极小）
+_last_key_refresh_time: float = 0
+_SYNC_INTERVAL = 60
+_KEY_REFRESH_COOLDOWN = 600
 _sync_lock = threading.Lock()  # 防止并发同步写入导致文件损坏
 _db_mtimes: dict[str, float] = {}  # 源 db 路径 -> 上次同步时的 mtime（避免重复解密）
 
@@ -73,18 +75,12 @@ _db_mtimes: dict[str, float] = {}  # 源 db 路径 -> 上次同步时的 mtime�
 def _auto_sync_decrypt() -> None:
     """
     增量同步：每分钟检查一次，仅对源文件 mtime 有变化的 message db 重新解密。
-    
-    策略：直接解密源文件（不含 WAL），因为微信的 WAL checkpoint 很频繁，
-    绝大部分数据已在主文件中。这样最多丢失最近一次 checkpoint 后的几条消息，
-    但绝不会因 WAL 合并错误导致数据库损坏。
-    
-    contact/session/group 等稳定数据不参与自动同步（手动 decrypt_db.py 一次即可）。
+    解密失败且判断为密钥过期时，自动重提取密钥（需管理员权限运行 Server）。
     """
-    global _last_sync_time, _reader
+    global _last_sync_time, _reader, _keys_cache
 
-    # 获取锁，防止并发同步写入同一文件
     if not _sync_lock.acquire(blocking=False):
-        return  # 已有同步在进行中，跳过
+        return
 
     try:
         now = time.time()
@@ -107,23 +103,22 @@ def _auto_sync_decrypt() -> None:
         if not keys:
             return
 
-        # 只处理新版路径下的 message db
         all_dbs = decrypt_mod.find_db_for_key("")
         message_dbs = [
             p for p in all_dbs
             if p.parent.name.lower() == "message"
             and p.stat().st_size >= 4096
-            and not p.name.startswith("message_fts")      # 跳过全文索引
-            and not p.name.startswith("message_resource")  # 跳过资源索引
+            and not p.name.startswith("message_fts")
+            and not p.name.startswith("message_resource")
         ]
 
         needs_reload = False
+        key_refresh_needed = False  # 是否需要刷新密钥
 
         with tempfile.TemporaryDirectory(prefix="wechat_sync_") as tmp_dir_str:
             tmp_dir = Path(tmp_dir_str)
 
             for src_path in message_dbs:
-                # 按源文件 mtime 判断是否有新数据落盘（微信 checkpoint 后 mtime 才更新）
                 src_key = str(src_path)
                 try:
                     src_mtime = src_path.stat().st_mtime
@@ -133,36 +128,57 @@ def _auto_sync_decrypt() -> None:
                 final_path = decrypt_mod.build_output_path(src_path)
                 last_seen = _db_mtimes.get(src_key)
                 if last_seen is None:
-                    # 首次见到：源文件不比已解密产物新，则记录 mtime 并跳过
                     if final_path.exists() and final_path.stat().st_mtime >= src_mtime:
                         _db_mtimes[src_key] = src_mtime
                         continue
                 elif src_mtime <= last_seen:
-                    continue  # 无变化，跳过
+                    continue
 
                 tmp_decrypted = tmp_dir / f"decrypted_{src_path.name}"
 
-                # 直接解密源文件（不合并 WAL），解密到临时文件
-                # 源文件本身已包含微信自动 checkpoint 后的大部分数据
-                direct_key = decrypt_mod._match_key_by_salt(src_path, keys)
+                # Windows 本地模式：用 decrypt_standalone 的解密逻辑
                 decrypted_ok = False
-                if direct_key is not None:
-                    decrypted_ok = decrypt_mod._try_direct_key(src_path, direct_key, tmp_decrypted)
-                if not decrypted_ok:
-                    for key_hex in keys.values():
-                        try:
-                            if decrypt_mod.decrypt_database(src_path, key_hex, tmp_decrypted, keys, silent=True):
-                                decrypted_ok = True
-                                break
-                        except Exception:
-                            pass
+                if _IS_WINDOWS:
+                    try:
+                        import importlib.util as _ilu, re as _re
+                        _spec = _ilu.spec_from_file_location(
+                            "decrypt_standalone",
+                            scripts_dir / "decrypt_standalone.py"
+                        )
+                        _ds = _ilu.module_from_spec(_spec)
+                        _spec.loader.exec_module(_ds)
+                        # 从 keys.json 找该文件对应的 key
+                        src_str = str(src_path).replace("\\", "/")
+                        key_hex = None
+                        for k, v in keys.items():
+                            if src_str.endswith(k.replace("\\", "/")) or k.replace("\\", "/").endswith(src_path.name):
+                                m = _re.match(r"x'([0-9a-fA-F]{64})", str(v))
+                                if m:
+                                    key_hex = m.group(1)
+                                    break
+                        if key_hex:
+                            decrypted_ok = _ds.decrypt_database(src_path, key_hex, tmp_decrypted)
+                    except Exception:
+                        pass
+                else:
+                    direct_key = decrypt_mod._match_key_by_salt(src_path, keys)
+                    if direct_key is not None:
+                        decrypted_ok = decrypt_mod._try_direct_key(src_path, direct_key, tmp_decrypted)
+                    if not decrypted_ok:
+                        for key_hex in keys.values():
+                            try:
+                                if decrypt_mod.decrypt_database(src_path, key_hex, tmp_decrypted, keys, silent=True):
+                                    decrypted_ok = True
+                                    break
+                            except Exception:
+                                pass
 
                 if not decrypted_ok:
-                    # 失败也记录 mtime：避免永久失败的文件每分钟重试，文件变化时才再试
-                    _db_mtimes[src_key] = src_mtime
+                    # 解密失败：可能密钥已过期，标记需要刷新
+                    # 注意：不记录 mtime，让下次仍然重试
+                    key_refresh_needed = True
                     continue
 
-                # 验证解密结果
                 try:
                     import sqlite3 as _sqlite3
                     uri = f"file:{tmp_decrypted}?mode=ro&immutable=1"
@@ -170,17 +186,16 @@ def _auto_sync_decrypt() -> None:
                     conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
                     conn.close()
                 except Exception:
-                    _db_mtimes[src_key] = src_mtime  # 同上，验证失败也记录
+                    key_refresh_needed = True
+                    _db_mtimes[src_key] = src_mtime
                     continue
 
-                # 验证通过，原子替换目标文件
                 final_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.move(str(tmp_decrypted), str(final_path))
                 except OSError:
                     continue
 
-                # 清理目标文件可能残留的 shm/wal
                 for suffix in ("-shm", "-wal"):
                     side = Path(str(final_path) + suffix)
                     if side.exists():
@@ -189,8 +204,12 @@ def _auto_sync_decrypt() -> None:
                         except OSError:
                             pass
 
-                _db_mtimes[src_key] = src_mtime  # 记录已同步的 mtime，下次无变化则跳过
+                _db_mtimes[src_key] = src_mtime
                 needs_reload = True
+
+        # 解密失败：尝试自动刷新密钥（需要管理员权限）
+        if key_refresh_needed and _IS_WINDOWS:
+            _auto_refresh_key(message_dbs, decrypt_mod, keys_file)
 
         if needs_reload and _reader is not None:
             _reader._discover_msg_dbs()
@@ -198,16 +217,129 @@ def _auto_sync_decrypt() -> None:
         _last_sync_time = now
 
     except Exception:
-        pass  # 同步失败不影响正常读取
+        pass
     finally:
         _sync_lock.release()
 
 
+# 上次密钥刷新时间（避免频繁重提取）
+_last_key_refresh_time: float = 0
+_KEY_REFRESH_COOLDOWN = 600  # 10分钟内不重复刷新
+
+
+def _auto_refresh_key(message_dbs: list, decrypt_mod, keys_file: Path) -> None:
+    """
+    自动刷新密钥：当解密失败时，从微信进程内存重新提取密钥。
+    需要 Server 以管理员权限运行。
+    冷却时间 10 分钟，避免反复扫内存。
+    """
+    global _last_key_refresh_time
+    import json, logging, importlib.util
+
+    logger = logging.getLogger(__name__)
+
+    now = time.time()
+    if now - _last_key_refresh_time < _KEY_REFRESH_COOLDOWN:
+        return
+
+    # 检查管理员权限
+    try:
+        import ctypes as _ctypes
+        if not _ctypes.windll.shell32.IsUserAnAdmin():
+            logger.warning("[key_refresh] 无管理员权限，跳过自动密钥刷新")
+            return
+    except Exception:
+        return
+
+    # 加载 decrypt_standalone 模块
+    try:
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        spec = importlib.util.spec_from_file_location(
+            "decrypt_standalone", scripts_dir / "decrypt_standalone.py"
+        )
+        standalone_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(standalone_mod)
+    except Exception as e:
+        logger.warning(f"[key_refresh] 无法加载 decrypt_standalone: {e}")
+        return
+
+    # 找微信进程
+    try:
+        import pymem as _pymem
+        for proc_name in ("Weixin.exe", "WeChat.exe"):
+            try:
+                pm = _pymem.Pymem(proc_name)
+                pid = pm.process_id
+                break
+            except Exception:
+                pid = None
+        if not pid:
+            logger.warning("[key_refresh] 未找到微信进程")
+            return
+    except ImportError:
+        logger.warning("[key_refresh] pymem 未安装，跳过自动密钥刷新")
+        return
+
+    # 找一个用于验证的数据库
+    db_for_verify = None
+    for p in message_dbs:
+        if p.stat().st_size >= standalone_mod.PAGE_SIZE:
+            db_for_verify = p
+            break
+    if not db_for_verify:
+        return
+
+    logger.info(f"[key_refresh] 开始自动刷新密钥 (PID={pid})...")
+    _last_key_refresh_time = now
+
+    try:
+        new_key = standalone_mod.find_key(pid, db_for_verify, silent=True)
+        if not new_key:
+            logger.warning("[key_refresh] 密钥提取失败")
+            return
+
+        # 更新 keys.json
+        from pathlib import Path as _Path
+        xwechat_base = standalone_mod.Path.home() / "Documents" / "xwechat_files"
+        new_keys: dict = {}
+        if xwechat_base.exists():
+            for wxid_dir in xwechat_base.iterdir():
+                db_storage = wxid_dir / "db_storage"
+                if not db_storage.exists():
+                    continue
+                for db in db_storage.rglob("*.db"):
+                    if db.stat().st_size < standalone_mod.PAGE_SIZE:
+                        continue
+                    try:
+                        salt_hex = db.read_bytes()[:standalone_mod.SALT_SIZE].hex()
+                        rel = str(db.relative_to(xwechat_base.parent)).replace("\\", "/")
+                        new_keys[rel] = f"x'{new_key}{salt_hex}'"
+                    except Exception:
+                        pass
+
+        if new_keys:
+            with open(keys_file, "w", encoding="utf-8") as f:
+                json.dump(new_keys, f, indent=2, ensure_ascii=False)
+            # 清空 mtime 缓存，让下次同步重新解密所有文件
+            _db_mtimes.clear()
+            logger.info(f"[key_refresh] 密钥刷新成功，更新了 {len(new_keys)} 条记录")
+    except Exception as e:
+        logger.warning(f"[key_refresh] 密钥刷新异常: {e}")
+
+
 def _get_reader() -> WeChatDBReader:
     global _reader
-    # Windows：使用 WeChatDataAnalysis HTTP API，无需解密数据库
     if _IS_WINDOWS:
-        if _reader is None:
+        # Windows 本地模式：decrypted/ 有数据时优先用本地 SQLite（与 Mac 完全一致）
+        decrypted_dir = get_decrypted_dir()
+        ready, _ = check_decrypted_dir(decrypted_dir)
+        if ready:
+            if _reader is None or isinstance(_reader, WeChatWindowsReader):
+                _reader = WeChatDBReader(str(decrypted_dir))
+            _auto_sync_decrypt()   # 与 Mac 相同的增量自动同步
+            return _reader
+        # 回退：decrypted/ 没有数据，用 HTTP API（需要 WeChatDataAnalysis 运行）
+        if _reader is None or isinstance(_reader, WeChatDBReader):
             _reader = WeChatWindowsReader()
         return _reader
     # Mac：使用本地解密数据库（原有逻辑）
@@ -420,9 +552,14 @@ def check_status() -> str:
     lines = ["=== 微信 MCP Server 状态检查 ===", ""]
 
     if _IS_WINDOWS:
-        # Windows：检查 WeChatDataAnalysis 后端
-        lines.append("平台: Windows")
-        lines.append("数据源: WeChatDataAnalysis HTTP API (http://localhost:10392)")
+        decrypted_dir = get_decrypted_dir()
+        ready, _ = check_decrypted_dir(decrypted_dir)
+        if ready:
+            lines.append("平台: Windows")
+            lines.append(f"数据源: 本地解密数据库 ({decrypted_dir})")
+        else:
+            lines.append("平台: Windows")
+            lines.append("数据源: WeChatDataAnalysis HTTP API (http://localhost:10392)")
         lines.append("")
         try:
             reader = _get_reader()
