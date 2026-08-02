@@ -22,9 +22,26 @@ PROJECT_ROOT = Path(__file__).parent.parent
 KEYS_FILE = PROJECT_ROOT / "keys.json"
 OUTPUT_DIR = PROJECT_ROOT / "decrypted"
 
-DB_BASE = Path(
-    "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files"
-).expanduser()
+def _get_db_base() -> Path:
+    """同时支持 Mac 和 Windows 的 xwechat_files 路径"""
+    mac_path = Path(
+        "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files"
+    ).expanduser()
+    if mac_path.exists():
+        return mac_path
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat") as key:
+            val, _ = winreg.QueryValueEx(key, "FileSavePath")
+            if val and val != "MyDocument:":
+                c = Path(val) / "xwechat_files"
+                if c.exists():
+                    return c
+    except Exception:
+        pass
+    return Path.home() / "Documents" / "xwechat_files"
+
+DB_BASE = _get_db_base()
 
 # SQLCipher 4 参数
 PAGE_SIZE = 4096
@@ -123,13 +140,15 @@ def main():
 
     print(f"加载密钥：{len(keys)} 个")
 
-    # 解析密钥为字节列表
+    # 解析密钥为字节列表（keys.json 格式：x'<64hex_key><32hex_salt>'）
     passphrases = []
     for k, v in keys.items():
-        m = re.match(r"x'([0-9a-fA-F]+)'", v)
-        if m:
-            hex_data = m.group(1)
-            passphrases.append(bytes.fromhex(hex_data[:64]))  # 取前32字节(64hex)
+        if isinstance(v, str):
+            m = re.match(r"x'([0-9a-fA-F]+)'", v)
+            if m:
+                passphrases.append(bytes.fromhex(m.group(1)[:64]))
+    # 去重
+    passphrases = list(dict.fromkeys(passphrases))
 
     print(f"有效密钥：{len(passphrases)} 个\n")
 
@@ -160,12 +179,26 @@ def main():
         ]
 
         for src in sorted(db_files):
-            rel = src.relative_to(db_storage)
-            dst = OUTPUT_DIR / rel
+            rel     = src.relative_to(db_storage)
+            rel_key = str(rel).replace("\\", "/")
+            dst     = OUTPUT_DIR / rel
             print(f"  解密: {rel}", end=" ... ", flush=True)
 
+            # keys.json 的 key 格式：xwechat_files/<wxid>/db_storage/<rel>
+            # 找到该文件对应的专属 passphrase
+            dedicated: bytes | None = None
+            for k, v in keys.items():
+                if k.endswith(rel_key):
+                    m = re.match(r"x'([0-9a-fA-F]+)'", v)
+                    if m:
+                        dedicated = bytes.fromhex(m.group(1)[:64])
+                    break
+
+            # 优先用专属密钥，找不到再遍历所有
+            candidates = [dedicated] if dedicated else passphrases
+
             success = False
-            for pp in passphrases:
+            for pp in candidates:
                 if try_decrypt(src, pp, dst):
                     success = True
                     break

@@ -1,6 +1,9 @@
-git add README.md# 敏感数据
+# 敏感数据
 keys.json
+wxecho_keys.json
+keys_windows.json
 decrypted/
+output/
 
 # Python
 __pycache__/
@@ -9,8 +12,8 @@ __pycache__/
 .venv/
 .python-version
 
-# uv
-uv.lock
+# uv 锁文件（建议提交以保证依赖版本一致）
+# uv.lock
 
 # IDE
 .DS_Store

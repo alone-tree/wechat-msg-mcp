@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-微信 Mac 数据库解密脚本。
+微信数据库解密脚本（Mac & Windows 通用）。
 
 从 keys.json 读取密钥，将加密的 SQLCipher 4 数据库解密为标准 SQLite 文件，
 输出到 decrypted/ 目录，供 MCP Server 读取。
 
+支持平台：
+  - macOS：~/Library/Containers/.../xwechat_files（新版）或 2.0b4.0.9/（旧版）
+  - Windows：~/Documents/xwechat_files（微信 4.x Windows 版，结构与 Mac 新版相同）
+
 使用方法：
-  python3 scripts/decrypt_db.py
+  python3 scripts/decrypt_db.py   # Mac
+  uv run python scripts/decrypt_db.py  # Windows（通过 uv）
 
 依赖：
   pip install pycryptodome  (或通过 uv sync 安装)
@@ -32,15 +37,40 @@ PROJECT_ROOT = Path(__file__).parent.parent
 KEYS_FILE = PROJECT_ROOT / "keys.json"
 OUTPUT_DIR = PROJECT_ROOT / "decrypted"
 
+# ── 平台路径配置 ─────────────────────────────────────────────────────────────
+
+# macOS 旧版（2.0b4.0.9/<account_hash>/）
 WECHAT_BASE = Path(
     "~/Library/Containers/com.tencent.xinWeChat/Data/Library/"
     "Application Support/com.tencent.xinWeChat/2.0b4.0.9"
 ).expanduser()
 
-# 新版微信 Mac 的数据库路径（wxid_xxx_xxxx/db_storage/）
+# macOS 新版（xwechat_files/<wxid>/db_storage/）
 WECHAT_DOCS_BASE = Path(
     "~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files"
 ).expanduser()
+
+# Windows 微信 4.x（~/Documents/xwechat_files/<wxid>/db_storage/）
+# 结构与 macOS 新版完全相同，复用相同解密逻辑
+def _get_windows_xwechat_base() -> Path:
+    """获取 Windows 版 xwechat_files 目录（支持注册表和默认路径）"""
+    if sys.platform != "win32":
+        return Path("/nonexistent")
+    # 优先从注册表读取自定义保存路径
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat") as key:
+            val, _ = winreg.QueryValueEx(key, "FileSavePath")
+            if val and val != "MyDocument:":
+                candidate = Path(val) / "xwechat_files"
+                if candidate.exists():
+                    return candidate
+    except Exception:
+        pass
+    # 默认路径：~/Documents/xwechat_files
+    return Path.home() / "Documents" / "xwechat_files"
+
+WECHAT_WIN_BASE = _get_windows_xwechat_base()
 
 # SQLCipher 4 参数
 PAGE_SIZE = 4096
@@ -315,16 +345,16 @@ def decrypt_database(src_path: Path, key_hex_str: str, dst_path: Path, keys: dic
 
 def find_db_for_key(key_label: str) -> list[Path]:
     """
-    当 keys.json 使用 key_0, key_1 等简单标签时，
-    尝试找到所有需要解密的数据库文件。
+    找到所有需要解密的数据库文件。
 
-    支持两种路径结构：
-      旧版：.../2.0b4.0.9/<account_hash>/Message/msg_*.db
-      新版：.../xwechat_files/<wxid>_<suffix>/db_storage/message/message_*.db
+    支持三种路径结构：
+      旧版 Mac：.../2.0b4.0.9/<account_hash>/Message/msg_*.db
+      新版 Mac：.../xwechat_files/<wxid>/db_storage/message/message_*.db
+      Windows：~/Documents/xwechat_files/<wxid>/db_storage/message/message_*.db
     """
     db_files = []
 
-    # --- 旧版路径扫描 ---
+    # --- 旧版 Mac 路径 ---
     if WECHAT_BASE.exists():
         for account_dir in WECHAT_BASE.iterdir():
             if not account_dir.is_dir():
@@ -337,9 +367,11 @@ def find_db_for_key(key_label: str) -> list[Path]:
             ]:
                 db_files.extend(account_dir.glob(pattern))
 
-    # --- 新版路径扫描 (xwechat_files/wxid_xxx/db_storage/) ---
-    if WECHAT_DOCS_BASE.exists():
-        for wxid_dir in WECHAT_DOCS_BASE.iterdir():
+    # --- 新版 Mac / Windows 共用路径（xwechat_files 结构相同）---
+    for xwechat_base in [WECHAT_DOCS_BASE, WECHAT_WIN_BASE]:
+        if not xwechat_base.exists():
+            continue
+        for wxid_dir in xwechat_base.iterdir():
             if not wxid_dir.is_dir():
                 continue
             db_storage = wxid_dir / "db_storage"
@@ -389,13 +421,14 @@ def build_output_path(src_path: Path) -> Path:
 
 def main():
     print("=" * 60)
-    print("  微信 Mac 数据库解密工具")
+    print("  微信数据库解密工具（Mac & Windows）")
     print("=" * 60)
     print()
 
     if not KEYS_FILE.exists():
         print(f"❌ 找不到密钥文件: {KEYS_FILE}")
-        print("请先运行: python3 scripts/extract_key.py")
+        print("Mac 用户请先运行:     python3 scripts/extract_key.py")
+        print("Windows 用户请先运行: uv run python scripts/extract_key_windows.py")
         sys.exit(1)
 
     with open(KEYS_FILE) as f:
@@ -416,33 +449,61 @@ def main():
     fail_count = 0
 
     if has_matched_paths:
-        # keys 已匹配到具体文件路径
+        # keys 的 key 是数据库相对路径，需要找到对应的绝对路径
+        # 搜索顺序：
+        #   1. 直接拼 xwechat_files 父目录（Windows / Mac 新版）
+        #   2. 在 WECHAT_BASE 旧版目录里搜索文件名（Mac 旧版）
+        #   3. 直接把 key 当绝对路径尝试
+        xwechat_parent = WECHAT_WIN_BASE.parent if WECHAT_WIN_BASE.exists() \
+                         else WECHAT_DOCS_BASE.parent
+
         for rel_path, key_hex in keys.items():
-            # 尝试从已知账号目录找到绝对路径
             src_found = None
-            for account_dir in WECHAT_BASE.iterdir():
-                if not account_dir.is_dir():
-                    continue
-                # rel_path 可能是相对于账号目录的
-                candidate = account_dir / rel_path
-                if candidate.exists():
-                    src_found = candidate
-                    break
-                # 也可能是文件名直接搜索
-                for db_file in account_dir.rglob(Path(rel_path).name):
-                    src_found = db_file
-                    break
-                if src_found:
-                    break
+
+            # 方式1：相对路径拼接 xwechat_files 上级（适用新版 Mac/Windows）
+            candidate = xwechat_parent / rel_path
+            if candidate.exists():
+                src_found = candidate
+
+            # 方式2：Mac 旧版目录搜索文件名
+            if not src_found and WECHAT_BASE.exists():
+                fname = Path(rel_path).name
+                for account_dir in WECHAT_BASE.iterdir():
+                    if not account_dir.is_dir():
+                        continue
+                    for db_file in account_dir.rglob(fname):
+                        src_found = db_file
+                        break
+                    if src_found:
+                        break
+
+            # 方式3：把 rel_path 当绝对路径
+            if not src_found:
+                p = Path(rel_path)
+                if p.is_absolute() and p.exists():
+                    src_found = p
 
             if not src_found:
                 print(f"  ⚠️  找不到数据库文件: {rel_path}，跳过")
                 continue
 
             dst_path = build_output_path(src_found)
-            print(f"  解密: {src_found.name} -> {dst_path.relative_to(OUTPUT_DIR)}")
+            try:
+                rel_display = dst_path.relative_to(OUTPUT_DIR)
+            except ValueError:
+                rel_display = dst_path
+            print(f"  解密: {src_found.name} -> {rel_display}")
 
-            if decrypt_database(src_found, key_hex, dst_path):
+            try:
+                ok = decrypt_database(src_found, key_hex, dst_path, keys)
+            except Exception as e:
+                import traceback
+                print(f"  ❌ 异常: {e}")
+                traceback.print_exc()
+                fail_count += 1
+                continue
+
+            if ok:
                 print(f"  ✅ 成功")
                 success_count += 1
             else:

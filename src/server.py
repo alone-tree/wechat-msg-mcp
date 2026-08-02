@@ -8,11 +8,17 @@ from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
+import sys
 from .config import get_decrypted_dir, check_decrypted_dir
 from .db.reader import WeChatDBReader
 from .tools import contacts as contact_tools
 from .tools import messages as message_tools
 from .tools import summary as summary_tools
+
+# Windows 平台使用 HTTP API Reader，无需解密数据库
+_IS_WINDOWS = sys.platform == "win32"
+if _IS_WINDOWS:
+    from .db.windows_reader import WeChatWindowsReader
 
 # ------------------------------------------------------------------ #
 # 初始化 MCP Server 和数据库 Reader                                    #
@@ -47,9 +53,10 @@ _args = _parse_args()
 mcp = FastMCP(
     name="wechat-message",
     instructions=(
-        "本 MCP Server 提供对微信 Mac 版本地聊天记录的只读访问能力。\n"
+        "本 MCP Server 提供对微信本地聊天记录的只读访问能力。\n"
         "可以查询联系人列表、聊天记录、搜索消息、生成统计汇总。\n"
-        "使用前请确保已运行 scripts/extract_key.py 和 scripts/decrypt_db.py 完成数据库解密。"
+        "Windows 平台：需要 WeChatDataAnalysis 运行在 http://localhost:10392。\n"
+        "macOS 平台：请确保已运行 scripts/extract_key.py 和 scripts/decrypt_db.py 完成数据库解密。"
     ),
     host=_args.host,
     port=_args.port,
@@ -198,14 +205,18 @@ def _auto_sync_decrypt() -> None:
 
 def _get_reader() -> WeChatDBReader:
     global _reader
-    # 先初始化 reader（用现有的解密文件）
+    # Windows：使用 WeChatDataAnalysis HTTP API，无需解密数据库
+    if _IS_WINDOWS:
+        if _reader is None:
+            _reader = WeChatWindowsReader()
+        return _reader
+    # Mac：使用本地解密数据库（原有逻辑）
     if _reader is None:
         decrypted_dir = get_decrypted_dir()
         ready, msg = check_decrypted_dir(decrypted_dir)
         if not ready:
             raise RuntimeError(msg)
         _reader = WeChatDBReader(str(decrypted_dir))
-    # 同步执行自动解密（完成后 reader 才返回，确保查询期间不会被写入干扰）
     _auto_sync_decrypt()
     return _reader
 
@@ -403,42 +414,72 @@ def chat_stats_overview(
 @mcp.tool()
 def check_status() -> str:
     """
-    检查 MCP Server 状态，包括解密数据库目录是否就绪、联系人数量等。
+    检查 MCP Server 状态，包括数据源是否就绪、联系人数量等。
     遇到问题时首先运行此工具进行诊断。
     """
     lines = ["=== 微信 MCP Server 状态检查 ===", ""]
 
-    decrypted_dir = get_decrypted_dir()
-    ready, msg = check_decrypted_dir(decrypted_dir)
-    lines.append(f"解密目录: {decrypted_dir}")
-    lines.append(f"状态: {'✅ 就绪' if ready else '❌ 未就绪'}")
-    lines.append(f"详情: {msg}")
-
-    if ready:
+    if _IS_WINDOWS:
+        # Windows：检查 WeChatDataAnalysis 后端
+        lines.append("平台: Windows")
+        lines.append("数据源: WeChatDataAnalysis HTTP API (http://localhost:10392)")
+        lines.append("")
         try:
             reader = _get_reader()
             contacts = reader.get_contacts()
             groups = [c for c in contacts if c.is_group]
             persons = [c for c in contacts if not c.is_group]
             lines.extend([
-                "",
+                f"状态: ✅ 后端连接正常",
                 f"联系人总数: {len(persons)} 人",
                 f"群聊总数:   {len(groups)} 个",
-                f"消息数据库: {len(reader._msg_db_paths)} 个文件",
                 "",
                 "✅ Server 正常，可以开始查询聊天记录。",
             ])
         except Exception as e:
-            lines.extend(["", f"❌ 初始化 Reader 失败: {e}"])
+            lines.extend([
+                f"状态: ❌ 后端连接失败",
+                f"错误: {e}",
+                "",
+                "请按以下步骤操作：",
+                "1. 启动 WeChatDataAnalysis",
+                "2. 确保微信已登录",
+                "3. 再次调用 check_status 确认就绪",
+            ])
     else:
-        lines.extend([
-            "",
-            "请按以下步骤操作：",
-            "1. 确保微信已登录并运行",
-            "2. 运行: python scripts/extract_key.py",
-            "3. 运行: python scripts/decrypt_db.py",
-            "4. 再次调用 check_status 确认就绪",
-        ])
+        # Mac：检查解密目录
+        lines.append("平台: macOS")
+        decrypted_dir = get_decrypted_dir()
+        ready, msg = check_decrypted_dir(decrypted_dir)
+        lines.append(f"解密目录: {decrypted_dir}")
+        lines.append(f"状态: {'✅ 就绪' if ready else '❌ 未就绪'}")
+        lines.append(f"详情: {msg}")
+
+        if ready:
+            try:
+                reader = _get_reader()
+                contacts = reader.get_contacts()
+                groups = [c for c in contacts if c.is_group]
+                persons = [c for c in contacts if not c.is_group]
+                lines.extend([
+                    "",
+                    f"联系人总数: {len(persons)} 人",
+                    f"群聊总数:   {len(groups)} 个",
+                    f"消息数据库: {len(reader._msg_db_paths)} 个文件",
+                    "",
+                    "✅ Server 正常，可以开始查询聊天记录。",
+                ])
+            except Exception as e:
+                lines.extend(["", f"❌ 初始化 Reader 失败: {e}"])
+        else:
+            lines.extend([
+                "",
+                "请按以下步骤操作：",
+                "1. 确保微信已登录并运行",
+                "2. 运行: python scripts/extract_key.py",
+                "3. 运行: python scripts/decrypt_db.py",
+                "4. 再次调用 check_status 确认就绪",
+            ])
 
     return "\n".join(lines)
 
