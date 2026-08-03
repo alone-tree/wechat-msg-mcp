@@ -6,6 +6,7 @@
 import hashlib
 import hmac
 import json
+import os
 import re
 import sqlite3
 import struct
@@ -105,10 +106,16 @@ def main():
     print(f"使用 keys.json（{len(keys)} 条密钥）")
     print(f"输出目录: {OUTPUT_DIR}\n")
 
-    # 找 xwechat_files
-    xwechat_base = Path.home() / "Documents" / "xwechat_files"
+    # 找 xwechat_files，优先读环境变量
+    env_path = os.environ.get("WECHAT_FILES_DIR", "").strip()
+    if env_path and Path(env_path).exists():
+        xwechat_base = Path(env_path)
+    else:
+        xwechat_base = Path.home() / "Documents" / "xwechat_files"
+
     if not xwechat_base.exists():
         print(f"❌ 找不到 xwechat_files: {xwechat_base}")
+        print("   请设置环境变量 WECHAT_FILES_DIR 指定路径")
         sys.exit(1)
 
     wxid_dirs = sorted(

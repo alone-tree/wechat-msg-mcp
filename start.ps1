@@ -10,7 +10,14 @@ if ($PSScriptRoot -ne $null -and $PSScriptRoot -ne "") {
 } else {
     $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
-$decryptedDir = Join-Path $projectDir "decrypted"
+
+# 可选：自定义微信数据目录（新机器路径不同时设置）
+$env:WECHAT_FILES_DIR = "C:\Users\14504\xwechat_files"
+
+# 可选：自定义解密输出目录
+# $env:WECHAT_DECRYPTED_DIR = "D:\你的路径\decrypted"
+
+$decryptedDir = if ($env:WECHAT_DECRYPTED_DIR) { $env:WECHAT_DECRYPTED_DIR } else { Join-Path $projectDir "decrypted" }
 $contactDb = Join-Path $decryptedDir "contact\contact.db"
 if (-not (Test-Path $contactDb)) {
     Write-Host "First run detected, decrypting databases..." -ForegroundColor Cyan

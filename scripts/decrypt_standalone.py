@@ -690,10 +690,29 @@ def main():
             print("❌ 未找到微信进程，请确保微信已登录运行")
             sys.exit(1)
 
-    # 找 xwechat_files
-    xwechat_base = Path.home() / "Documents" / "xwechat_files"
+    # 找 xwechat_files，优先读环境变量 WECHAT_FILES_DIR
+    env_path = os.environ.get("WECHAT_FILES_DIR", "").strip()
+    if env_path and Path(env_path).exists():
+        xwechat_base = Path(env_path)
+    else:
+        # 从注册表读取
+        xwechat_base = None
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat") as key:
+                val, _ = winreg.QueryValueEx(key, "FileSavePath")
+                if val and val != "MyDocument:":
+                    candidate = Path(val) / "xwechat_files"
+                    if candidate.exists():
+                        xwechat_base = candidate
+        except Exception:
+            pass
+        if xwechat_base is None:
+            xwechat_base = Path.home() / "Documents" / "xwechat_files"
+
     if not xwechat_base.exists():
         print(f"❌ 找不到 xwechat_files: {xwechat_base}")
+        print("   请设置环境变量 WECHAT_FILES_DIR 指定路径")
         sys.exit(1)
     print(f"✅ xwechat_files: {xwechat_base}")
 
@@ -776,4 +795,8 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()
