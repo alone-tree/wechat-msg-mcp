@@ -9,11 +9,16 @@
   4. 批量解密所有数据库到 decrypted/ 目录
   5. MCP Server 直接读取本地解密文件（与 Mac 模式一致）
 
+注意：WAL 合并功能暂时禁用（_read_with_wal 直接返回主 db），
+避免损坏部分数据库文件。最新消息依赖微信自动 WAL checkpoint 后再解密。
+如需获取最新消息，可在微信里切换聊天窗口触发 checkpoint 后重新运行此脚本，
+或直接运行 quick_decrypt.py（无需管理员权限）。
+
 依赖（先安装）：
   uv add yara-python pymem pefile
 
 运行方式（需要管理员权限）：
-  uv run python scripts\\verify_standalone_decrypt.py
+  uv run python scripts\\decrypt_standalone.py
 
 环境变量：
   WEIXIN_DLL=C:\\path\\to\\Weixin.dll   手动指定 DLL 路径（自动检测失败时使用）
@@ -437,10 +442,79 @@ def _scan_memory_silent(pid: int) -> list[bytes] | None:
 
 # ── Step 4：解密数据库 ────────────────────────────────────────────────────────
 
-def decrypt_database(src: Path, key_hex: str, dst: Path) -> bool:
-    """用找到的密钥解密数据库"""
+def _read_with_wal(src: Path, wal_path: Path) -> bytes:
+    """
+    暂时禁用 WAL 合并——直接返回主 db 数据。
+    WAL 合并逻辑会损坏部分数据库，暂时关闭等待修复。
+    """
+    return src.read_bytes()
+
+
+def _decrypt_data(data: bytes, key_hex: str, dst: Path) -> bool:
+    """直接解密已读取的数据（不合并 WAL）"""
     key_bytes = bytes.fromhex(key_hex)
-    data      = src.read_bytes()
+    if len(data) < PAGE_SIZE:
+        return False
+    if data.startswith(SQLITE_MAGIC):
+        dst.write_bytes(data)
+        return True
+    salt = data[:SALT_SIZE]
+    mac_salt = bytes(b ^ 0x3A for b in salt)
+    page1 = data[:PAGE_SIZE]
+    data_end = PAGE_SIZE - RESERVE_SIZE + IV_SIZE
+    stored_hmac = page1[PAGE_SIZE - HMAC_SIZE: PAGE_SIZE]
+    # 试 raw enc_key
+    mac_key_try = hashlib.pbkdf2_hmac("sha512", key_bytes, mac_salt, 2, dklen=KEY_SIZE)
+    h = hmac.new(mac_key_try, page1[SALT_SIZE: data_end], hashlib.sha512)
+    h.update(struct.pack("<I", 1))
+    if hmac.compare_digest(h.digest(), stored_hmac):
+        enc_key = key_bytes
+    else:
+        enc_key = hashlib.pbkdf2_hmac("sha512", key_bytes, salt, PBKDF2_ITER, dklen=KEY_SIZE)
+        mac_key2 = hashlib.pbkdf2_hmac("sha512", enc_key, mac_salt, 2, dklen=KEY_SIZE)
+        h2 = hmac.new(mac_key2, page1[SALT_SIZE: data_end], hashlib.sha512)
+        h2.update(struct.pack("<I", 1))
+        if not hmac.compare_digest(h2.digest(), stored_hmac):
+            return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    total_pages = len(data) // PAGE_SIZE
+    with open(dst, "wb") as out:
+        for page_no in range(total_pages):
+            page = data[page_no * PAGE_SIZE: (page_no + 1) * PAGE_SIZE]
+            offset = SALT_SIZE if page_no == 0 else 0
+            iv = page[PAGE_SIZE - RESERVE_SIZE: PAGE_SIZE - RESERVE_SIZE + IV_SIZE]
+            enc = page[offset: PAGE_SIZE - RESERVE_SIZE]
+            from Crypto.Cipher import AES as _AES
+            dec = _AES.new(enc_key, _AES.MODE_CBC, iv).decrypt(enc)
+            if page_no == 0:
+                out.write(SQLITE_MAGIC)
+                out.write(dec)
+            else:
+                out.write(dec)
+            out.write(b"\x00" * RESERVE_SIZE)
+    try:
+        conn = sqlite3.connect(f"file:{dst}?mode=ro&immutable=1", uri=True)
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        conn.close()
+        return True
+    except sqlite3.DatabaseError as e:
+        try:
+            dst.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+
+
+def decrypt_database(src: Path, key_hex: str, dst: Path) -> bool:
+    """用找到的密钥解密数据库，解密前先合并 WAL"""
+    key_bytes = bytes.fromhex(key_hex)
+
+    # 如果有 WAL 文件，合并后再解密
+    wal_path = Path(str(src) + "-wal")
+    if wal_path.exists() and wal_path.stat().st_size > 0:
+        data = _read_with_wal(src, wal_path)
+    else:
+        data = src.read_bytes()
 
     if len(data) < PAGE_SIZE:
         print(f"  ❌ 文件过小: {len(data)} 字节")
@@ -526,12 +600,10 @@ def decrypt_database(src: Path, key_hex: str, dst: Path) -> bool:
 def decrypt_all_databases(key_hex: str, xwechat_base: Path, output_dir: Path) -> tuple[int, int]:
     """
     批量解密 db_storage 下所有数据库，输出到 output_dir。
-    目录映射：db_storage/<subdir>/<name>.db → output_dir/<subdir>/<name>.db
-    返回 (成功数, 失败数)
+    message_0.db 合并 WAL，其他数据库直接解密主文件。
     """
     success = fail = 0
 
-    # 找最近使用的账号目录
     wxid_dirs = sorted(
         [d for d in xwechat_base.iterdir() if d.is_dir() and (d / "db_storage").exists()],
         key=lambda p: p.stat().st_mtime, reverse=True,
@@ -544,8 +616,10 @@ def decrypt_all_databases(key_hex: str, xwechat_base: Path, output_dir: Path) ->
     print(f"  账号目录: {wxid_dirs[0].name}")
     print(f"  db_storage: {db_storage}")
 
-    # 收集所有 .db 文件（跳过 fts 全文索引，一般不需要）
     SKIP = {"key_info.db"}
+    # 只对 message 类数据库合并 WAL，其他直接解密
+    WAL_MERGE_PATTERNS = {"message_0.db", "biz_message_0.db", "media_0.db"}
+
     dbs = [
         p for p in db_storage.rglob("*.db")
         if p.stat().st_size >= PAGE_SIZE
@@ -559,7 +633,17 @@ def decrypt_all_databases(key_hex: str, xwechat_base: Path, output_dir: Path) ->
         dst = output_dir / rel
         size_kb = src.stat().st_size // 1024
         print(f"  解密: {str(rel):45s} ({size_kb:>6} KB) ...", end=" ", flush=True)
-        ok = decrypt_database(src, key_hex, dst)
+
+        # 只对 message 类数据库合并 WAL
+        wal_path = Path(str(src) + "-wal")
+        if src.name in WAL_MERGE_PATTERNS and wal_path.exists() and wal_path.stat().st_size > 0:
+            ok = decrypt_database(src, key_hex, dst)  # _read_with_wal 在 decrypt_database 里
+        else:
+            # 其他数据库直接读主文件，不合并 WAL
+            data = src.read_bytes()
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            ok = _decrypt_data(data, key_hex, dst)
+
         if ok:
             print("✅")
             success += 1

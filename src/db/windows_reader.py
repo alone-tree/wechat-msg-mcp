@@ -1,15 +1,12 @@
 """
-微信 Windows 版数据读取层
+微信 Windows 版数据读取层（HTTP API 模式）
 
 通过调用 WeChatDataAnalysis 后端（http://localhost:10392）的 HTTP API
-读取联系人、会话、消息数据。
+读取联系人、会话、消息数据。仅在 decrypted/ 目录不存在时作为回退模式使用。
 
-接口与 WeChatDBReader 保持一致，可以直接替换使用。
-
-前置条件：
-  WeChatDataAnalysis 已安装并运行，微信已登录。
-  默认后端地址：http://localhost:10392
-  可通过环境变量 WCDA_BASE_URL 自定义。
+Windows 默认模式为本地解密数据库（WeChatDBReader），与 Mac 一致。
+本 Reader 为回退方案，前置条件：WeChatDataAnalysis 已安装并运行，微信已登录。
+默认后端地址：http://localhost:10392，可通过环境变量 WCDA_BASE_URL 自定义。
 """
 import os
 import urllib.request

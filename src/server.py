@@ -15,7 +15,7 @@ from .tools import contacts as contact_tools
 from .tools import messages as message_tools
 from .tools import summary as summary_tools
 
-# Windows 平台使用 HTTP API Reader，无需解密数据库
+# Windows 平台优先使用本地解密数据库，回退到 HTTP API Reader
 _IS_WINDOWS = sys.platform == "win32"
 if _IS_WINDOWS:
     from .db.windows_reader import WeChatWindowsReader
@@ -55,7 +55,8 @@ mcp = FastMCP(
     instructions=(
         "本 MCP Server 提供对微信本地聊天记录的只读访问能力。\n"
         "可以查询联系人列表、聊天记录、搜索消息、生成统计汇总。\n"
-        "Windows 平台：需要 WeChatDataAnalysis 运行在 http://localhost:10392。\n"
+        "Windows 平台：优先使用本地解密数据库（decrypted/ 目录），"
+        "若未解密则回退到 WeChatDataAnalysis HTTP API（http://localhost:10392）。\n"
         "macOS 平台：请确保已运行 scripts/extract_key.py 和 scripts/decrypt_db.py 完成数据库解密。"
     ),
     host=_args.host,

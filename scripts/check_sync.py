@@ -16,7 +16,7 @@ for wxid in xbase.iterdir():
     src = wxid / 'db_storage/message'
     if not src.exists():
         continue
-    for db in sorted(src.glob('message_*.db')):
+    for db in sorted(src.glob('*.db')):
         if 'fts' in db.name:
             continue
         wal = Path(str(db) + '-wal')

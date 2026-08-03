@@ -16,7 +16,6 @@
 
 - Windows 10/11，微信 4.x（已登录）
 - Python 3.10+，[uv](https://docs.astral.sh/uv/) 包管理器
-- [WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest) 已安装
 
 ### 步骤
 
@@ -24,22 +23,35 @@
 
 ```
 uv sync
+uv add yara-python pymem pefile
 ```
 
-**第二步：启动 WeChatDataAnalysis**
+**第二步：首次解密数据库（需要管理员权限）**
 
-打开 WeChatDataAnalysis，确保微信已登录，后端自动运行在 `http://localhost:10392`。
-
-**第三步：启动 MCP Server（HTTP 模式）**
+以管理员权限运行 start.ps1，首次启动会自动检测并解密：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-或直接运行：
+或手动运行解密脚本（管理员权限）：
 
 ```
-uv run python -m src.server --transport streamable-http --host 0.0.0.0 --port 8765
+uv run python scripts\decrypt_standalone.py
+```
+
+密钥自动提取并保存到 `keys.json`，数据库解密到 `decrypted/`。
+
+**之后日常更新解密（无需管理员权限）：**
+
+```
+uv run python scripts\quick_decrypt.py
+```
+
+**第三步：启动 MCP Server（HTTP 模式）**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
 服务启动后监听在 `http://localhost:8765/mcp`。
@@ -63,8 +75,21 @@ uv run python -m src.server --transport streamable-http --host 0.0.0.0 --port 87
 
 在 Kiro 里调用 `check_status` 工具，确认联系人数量正常。
 
-> **注意**：每次使用前需先启动 WeChatDataAnalysis 和 MCP Server。  
-> 可通过环境变量 `WCDA_BASE_URL` 自定义后端地址（默认 `http://localhost:10392`）。
+> **注意**：
+> - MCP Server 以管理员权限运行时，密钥失效后会自动重新提取（10分钟冷却）
+> - 消息同步约有 1~5 分钟延迟（依赖微信 WAL checkpoint 频率）
+> - 如需立即获取最新消息，运行 `uv run python scripts\quick_decrypt.py` 后重启 Server
+> - WeChatDataAnalysis 不再是必须依赖，仅作为回退方案
+
+---
+
+### Windows 回退模式（WeChatDataAnalysis）
+
+若无法使用本地解密（如首次解密失败），可以使用 WeChatDataAnalysis 作为数据源：
+
+1. 安装并启动 [WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest)，确保微信已登录
+2. 后端自动运行在 `http://localhost:10392`
+3. 启动 start.ps1，Server 会自动检测并使用 HTTP API 模式
 
 ---
 
@@ -197,12 +222,12 @@ chat_stats_overview(period="last_30_days", top_n=10)
 ```
 wechat-msg-mcp/
 ├── src/
-│   ├── server.py               # MCP Server 主入口（自动按平台选择 Reader）
+│   ├── server.py               # MCP Server 主入口（自动按平台和模式选择 Reader）
 │   ├── config.py               # 路径配置（macOS）
 │   ├── db/
 │   │   ├── models.py           # 数据模型
-│   │   ├── reader.py           # macOS 本地数据库读取
-│   │   └── windows_reader.py   # Windows HTTP API 读取
+│   │   ├── reader.py           # 本地 SQLite 读取（Mac + Windows 本地模式）
+│   │   └── windows_reader.py   # Windows HTTP API 读取（回退模式）
 │   └── tools/
 │       ├── contacts.py
 │       ├── messages.py
@@ -210,10 +235,10 @@ wechat-msg-mcp/
 ├── scripts/
 │   ├── extract_key.py          # macOS 密钥提取（lldb）
 │   ├── decrypt_db.py           # 数据库解密（Mac & Windows 通用）
-│   ├── decrypt_wxecho.py       # Mac xwechat_files 解密
-│   ├── extract_key_windows.py  # Windows 密钥提取（备用，内存扫描）
-│   └── convert_wxecho_keys.py  # wxecho_keys 格式转换工具
-├── start.ps1                   # Windows HTTP 模式启动脚本
+│   ├── decrypt_standalone.py   # Windows 独立解密（含密钥提取，需管理员）
+│   ├── quick_decrypt.py        # Windows 快速重解密（用已有密钥，无需管理员）
+│   └── extract_key_windows.py  # Windows 密钥提取（备用，内存扫描）
+├── start.ps1                   # Windows HTTP 模式启动脚本（自动首次解密）
 ├── pyproject.toml
 ├── uv.lock
 └── README.md

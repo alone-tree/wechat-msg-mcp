@@ -59,44 +59,66 @@ class WeChatDBReader:
 
         try:
             conn = self._open_db(contact_db)
-        except Exception:
-            return  # contact.db 损坏，跳过，不影响消息查询
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"_load_contacts open_db failed: {e}")
+            return
 
         try:
-            conn = self._open_db(contact_db)
-        except Exception:
-            return  # contact.db 损坏，跳过，不影响消息查询
+            all_tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
 
-        try:
-            # 微信 4.x: contact 表，字段 username/remark/nick_name，有 id 字段
-            # 旧版: Friend 表，字段 userName/remark/nickName
+            loaded = False
             for table, col_id, col_user, col_remark, col_nick in [
-                ("contact", "id",   "username", "remark", "nick_name"),
-                ("Friend",  "rowid","userName", "remark", "nickName"),
-                ("WCContact","rowid","userName","remark", "nickName"),
+                ("contact",  "id",    "username", "remark", "nick_name"),
+                ("contact",  "id",    "username", "remark", "nickname"),
+                ("Friend",   "rowid", "userName", "remark", "nickName"),
+                ("WCContact","rowid", "userName", "remark", "nickName"),
             ]:
+                if table not in all_tables:
+                    continue
                 try:
                     rows = conn.execute(
                         f"SELECT {col_id}, {col_user}, {col_remark}, {col_nick} FROM {table}"
                     ).fetchall()
-                    for row_id, username, remark, nickname in rows:
+                    for row in rows:
+                        row_id, username, remark, nickname = row[0], row[1], row[2], row[3]
                         if not username:
                             continue
                         is_group = username.endswith("@chatroom")
-                        c = Contact(
-                            username=username,
-                            remark=remark or "",
-                            nickname=nickname or "",
-                            is_group=is_group,
-                        )
+                        c = Contact(username=username, remark=remark or "",
+                                    nickname=nickname or "", is_group=is_group)
                         self._contact_cache[username] = c
                         if row_id:
                             self._contact_id_cache[int(row_id)] = c
-                    break
-                except sqlite3.OperationalError:
+                    if self._contact_cache:
+                        loaded = True
+                        break
+                except sqlite3.OperationalError as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"_load_contacts table {table} failed: {e}")
                     continue
-        except Exception:
-            pass  # contact.db 读取失败时静默跳过
+
+            if not loaded and "contact" in all_tables:
+                try:
+                    rows = conn.execute("SELECT id, username FROM contact").fetchall()
+                    for row in rows:
+                        row_id, username = row[0], row[1]
+                        if not username:
+                            continue
+                        is_group = username.endswith("@chatroom")
+                        c = Contact(username=username, remark="",
+                                    nickname=username, is_group=is_group)
+                        self._contact_cache[username] = c
+                        if row_id:
+                            self._contact_id_cache[int(row_id)] = c
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"_load_contacts fallback failed: {e}")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"_load_contacts outer failed: {e}")
         finally:
             conn.close()
 
@@ -128,10 +150,14 @@ class WeChatDBReader:
         msg_dir = self.root / "message"
         if not msg_dir.exists():
             return
-        # 微信 4.x: message_0.db ~ message_N.db
+        # 微信 4.x: message_0.db ~ message_N.db + biz_message_0.db（服务号/企业微信）
         self._msg_db_paths = sorted(
-            p for p in msg_dir.glob("message_*.db")
-            if p.stat().st_size >= 4096  # 跳过空文件或损坏文件
+            p for p in msg_dir.glob("*.db")
+            if p.stat().st_size >= 4096
+            and not p.name.startswith("message_fts")
+            and not p.name.startswith("message_resource")
+            and not p.name.startswith("media_")
+            and not p.name.startswith("weclaw")
         )
         if not self._msg_db_paths:
             # 兼容旧版路径 msg_*.db
@@ -142,11 +168,8 @@ class WeChatDBReader:
 
     @staticmethod
     def _checkpoint_db(path: Path) -> None:
-        """
-        对指定数据库执行 WAL checkpoint，将 WAL 文件内容合并到主数据库。
-        解密后的 db 不需要 checkpoint（没有真实的 WAL），直接跳过。
-        """
-        pass  # 解密后的 SQLite 文件不需要 checkpoint，跳过
+        """解密后的 db 不需要 checkpoint，跳过。"""
+        pass  # 解密后的 SQLite 文件已是标准格式，无需 checkpoint
 
     def checkpoint_all(self) -> None:
         """对所有数据库文件执行 WAL checkpoint，获取最新消息数据。"""
