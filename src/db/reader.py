@@ -237,6 +237,55 @@ class WeChatDBReader:
                 return first_line[:-1], rest
         return None, content
 
+    def _build_local_sender_map(self, conn: sqlite3.Connection) -> dict[int, str]:
+        """
+        构建分库本地的发送者编号映射：Name2Id.rowid -> user_name。
+
+        微信 4.x 的 message 分库各有一套本地发送者编号：Msg 表的 real_sender_id
+        是本库 Name2Id 表的 rowid，而**不是**全局 contact 表的 rowid。
+        两者不能混用，否则发送者名字会张冠李戴。
+        """
+        mapping: dict[int, str] = {}
+        try:
+            rows = conn.execute("SELECT rowid, user_name FROM Name2Id").fetchall()
+            for r in rows:
+                rid = r[0]
+                name = r[1]
+                if rid is not None:
+                    mapping[int(rid)] = name or ""
+        except sqlite3.OperationalError:
+            pass
+        return mapping
+
+    def _resolve_local_sender(
+        self, real_sender_id, local_map: dict[int, str]
+    ) -> tuple[Optional[str], bool]:
+        """
+        把分库本地的 real_sender_id 解析为 (wxid, is_from_me)。
+
+        规则（依据微信 4.x 库结构实测）：
+        - real_sender_id 对应本库 Name2Id.rowid；
+        - Name2Id.user_name 为空字符串 = 自己发的（私聊自己发的消息无发送者）；
+        - 非空 user_name = 对方的 wxid；
+        - 编号查不到时不乱猜，返回 (None, False)。
+        """
+        if real_sender_id is None or real_sender_id == "":
+            return None, True
+        try:
+            rid = int(real_sender_id)
+        except (ValueError, TypeError):
+            # 本身就是 wxid 字符串
+            s = str(real_sender_id)
+            is_me = bool(self._my_username) and s == self._my_username
+            return s, is_me
+        name = local_map.get(rid)
+        if name is None:
+            return None, False
+        if name == "":
+            return None, True
+        is_me = bool(self._my_username) and name == self._my_username
+        return name, is_me
+
     def _get_sender_name(self, sender_id: Optional[str]) -> Optional[str]:
         if not sender_id:
             return None
@@ -449,6 +498,9 @@ class WeChatDBReader:
                 if not exists:
                     continue
 
+                # 本库的发送者编号映射（Name2Id.rowid -> wxid）
+                local_sender_map = self._build_local_sender_map(conn)
+
                 rows = conn.execute(
                     f"""SELECT local_id, server_id, local_type,
                                real_sender_id, create_time,
@@ -469,8 +521,9 @@ class WeChatDBReader:
                     content = self._decompress_content(raw_content, ct_flag or 0)
 
                     # 判断发送方
-                    # 新版微信规律：origin_source=1 是自己发的，origin_source=2 是别人发的
-                    # 群消息：message_content 带 "wxid_xxx:\n" 前缀的是别人发的，无前缀是自己发的
+                    # 微信 4.x：real_sender_id 是本库 Name2Id 的 rowid，
+                    # Name2Id.user_name 为空 = 自己发的；
+                    # 群消息：message_content 带 "wxid_xxx:\n" 前缀的是别人发的
                     sender_id: Optional[str] = None
                     origin_source = row[7] if len(row) > 7 else None
 
@@ -479,26 +532,27 @@ class WeChatDBReader:
                         if extracted_id:
                             # 有 sender:\n 前缀 = 别人发的
                             sender_id = extracted_id
-                            is_from_me = False
+                            is_from_me = bool(self._my_username) and extracted_id == self._my_username
                         elif local_type and local_type == 10000:
                             # local_type=10000 是系统消息（入群邀请、安全提醒等），不是任何人发的
                             sender_id = "[系统消息]"
                             is_from_me = False
-                        elif content.strip().startswith('<?xml'):
-                            # XML 格式内容（视频、位置、名片等）没有 sender:\n 前缀，
-                            # 用 real_sender_id 判断归属
-                            sender_id = real_sender_id
-                            is_from_me = (self._my_username and real_sender_id == self._my_username)
                         else:
-                            # 无 sender:\n 前缀且非系统消息、非XML = 自己发的文字消息
-                            sender_id = self._my_username or real_sender_id
-                            is_from_me = True
+                            # 无前缀（XML 消息或自己发的）→ 用 Name2Id 解析归属
+                            wxid, is_from_me = self._resolve_local_sender(
+                                real_sender_id, local_sender_map
+                            )
+                            if wxid:
+                                sender_id = wxid
+                            elif is_from_me:
+                                sender_id = self._my_username or "[我]"
+                            else:
+                                sender_id = "[未知发送者]"
                     else:
-                        sender_id = real_sender_id
-                        if self._my_username:
-                            is_from_me = (real_sender_id == self._my_username) or (not real_sender_id)
-                        else:
-                            is_from_me = not bool(real_sender_id)
+                        wxid, is_from_me = self._resolve_local_sender(
+                            real_sender_id, local_sender_map
+                        )
+                        sender_id = wxid if wxid else (self._my_username or "[我]")
 
                     messages.append(Message(
                         local_id=local_id or 0,
@@ -555,6 +609,8 @@ class WeChatDBReader:
             conn = self._open_db(db_path)
             try:
                 name2id = self._build_name2id_map(conn)
+                # 本库的发送者编号映射（Name2Id.rowid -> wxid）
+                local_sender_map = self._build_local_sender_map(conn)
 
                 # 获取当前 db 中的所有 Msg_ 表
                 tables = conn.execute(
@@ -603,19 +659,20 @@ class WeChatDBReader:
                             extracted_id, content = self._parse_group_sender(content)
                             if extracted_id:
                                 sender_id = extracted_id
-                                is_from_me = False
+                                is_from_me = bool(self._my_username) and extracted_id == self._my_username
                             elif local_type and local_type == 10000:
                                 sender_id = "[系统消息]"
                                 is_from_me = False
                             else:
-                                sender_id = self._my_username or real_sender_id
-                                is_from_me = True
+                                wxid, is_from_me = self._resolve_local_sender(
+                                    real_sender_id, local_sender_map
+                                )
+                                sender_id = wxid or self._my_username or "[我]"
                         else:
-                            sender_id = real_sender_id
-                            if self._my_username:
-                                is_from_me = (real_sender_id == self._my_username) or (not real_sender_id)
-                            else:
-                                is_from_me = not bool(real_sender_id)
+                            wxid, is_from_me = self._resolve_local_sender(
+                                real_sender_id, local_sender_map
+                            )
+                            sender_id = wxid if wxid else (self._my_username or "[我]")
 
                         results.append(Message(
                             local_id=local_id or 0,

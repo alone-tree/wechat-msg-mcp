@@ -71,20 +71,25 @@ SQLITE_MAGIC  = b"SQLite format 3\x00"
 
 def find_weixin_dll() -> Path:
     """自动定位 Weixin.dll，支持多版本安装路径"""
+    import string
     import winreg
-    
-    # 从注册表找安装路径
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r"SOFTWARE\WOW6432Node\Tencent\WeChat") as k:
-            install_dir = Path(winreg.QueryValueEx(k, "InstallPath")[0])
-    except Exception:
+
+    registry_keys = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Tencent\WeChat"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Tencent\WeChat"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Tencent\Weixin"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Tencent\Weixin"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Tencent\Weixin"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Tencent\WeChat"),
+    ]
+    install_dir = None
+    for hive, subkey in registry_keys:
         try:
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                r"SOFTWARE\Tencent\WeChat") as k:
+            with winreg.OpenKey(hive, subkey) as k:
                 install_dir = Path(winreg.QueryValueEx(k, "InstallPath")[0])
+                break
         except Exception:
-            install_dir = None
+            continue
 
     candidates = []
     if install_dir and install_dir.exists():
@@ -94,15 +99,22 @@ def find_weixin_dll() -> Path:
         for dll in install_dir.glob("Weixin.dll"):
             candidates.append(dll)
 
-    # 常见默认路径
-    for base in [
-        Path("C:/Program Files/Tencent/WeChat"),
-        Path("C:/Program Files (x86)/Tencent/WeChat"),
-        Path("C:/Program Files/Tencent/Weixin"),
-        Path("C:/Program Files (x86)/Tencent/Weixin"),
+    # 常见默认路径：穷举所有盘符（微信 4.x 可自定义安装到任意盘，如 D:\Program Files (x86)\Tencent\Weixin）
+    subdir_names = [
+        "Program Files/Tencent/Weixin",
+        "Program Files (x86)/Tencent/Weixin",
+        "Program Files/Tencent/WeChat",
+        "Program Files (x86)/Tencent/WeChat",
+    ]
+    bases = []
+    for drive in string.ascii_uppercase:
+        for sub in subdir_names:
+            bases.append(Path(f"{drive}:/{sub}"))
+    bases += [
         Path.home() / "AppData/Local/Tencent/WeChat",
         Path.home() / "AppData/Local/Tencent/Weixin",
-    ]:
+    ]
+    for base in bases:
         if base.exists():
             for dll in base.rglob("Weixin.dll"):
                 candidates.append(dll)
@@ -775,7 +787,9 @@ def main():
     print(f"  密钥已保存到 keys.json（{len(keys_data)} 条）")
 
     # 批量解密所有数据库
-    output_dir = project_root / "decrypted"
+    # 与 start.ps1 / quick_decrypt.py 对齐：优先读 WECHAT_DECRYPTED_DIR 环境变量
+    _output_env = os.environ.get("WECHAT_DECRYPTED_DIR", "").strip()
+    output_dir = Path(_output_env) if _output_env else (project_root / "decrypted")
     print()
     print(f"开始批量解密 → {output_dir}")
     print()

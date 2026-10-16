@@ -21,7 +21,9 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).parent.parent
 KEYS_FILE    = PROJECT_ROOT / "keys.json"
-OUTPUT_DIR   = PROJECT_ROOT / "decrypted"
+# 与 start.ps1 / decrypt_standalone.py 对齐：优先读 WECHAT_DECRYPTED_DIR 环境变量
+_OUTPUT_DIR_ENV = os.environ.get("WECHAT_DECRYPTED_DIR", "").strip()
+OUTPUT_DIR   = Path(_OUTPUT_DIR_ENV) if _OUTPUT_DIR_ENV else (PROJECT_ROOT / "decrypted")
 
 PAGE_SIZE    = 4096
 SALT_SIZE    = 16

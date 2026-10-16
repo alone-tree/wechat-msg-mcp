@@ -12,10 +12,11 @@ if ($PSScriptRoot -ne $null -and $PSScriptRoot -ne "") {
 }
 
 # 可选：自定义微信数据目录（新机器路径不同时设置）
-$env:WECHAT_FILES_DIR = "C:\Users\14504\xwechat_files"
+$env:WECHAT_FILES_DIR = "F:\xwechat_files"
 
-# 可选：自定义解密输出目录
-# $env:WECHAT_DECRYPTED_DIR = "D:\你的路径\decrypted"
+# 解密输出目录：2026-10-16 起统一用项目内 decrypted（与 keys.json、服务读取目录一致）。
+# 旧外部目录 D:\Github\wechat-msg-mcp-data\decrypted 是 9 月 12 日的过期快照，已弃用。
+$env:WECHAT_DECRYPTED_DIR = Join-Path $projectDir "decrypted"
 
 $decryptedDir = if ($env:WECHAT_DECRYPTED_DIR) { $env:WECHAT_DECRYPTED_DIR } else { Join-Path $projectDir "decrypted" }
 $contactDb = Join-Path $decryptedDir "contact\contact.db"
@@ -33,7 +34,16 @@ if (-not (Test-Path $contactDb)) {
     Write-Host "Decryption complete." -ForegroundColor Green
     Write-Host ""
 }
-Write-Host "Starting WeChat MCP Server on http://localhost:8765/mcp ..."
+elseif (Test-Path (Join-Path $projectDir "keys.json")) {
+    # 每次启动自动刷新：用已保存的密钥重新解密最新数据（无需管理员，微信开着效果最好）
+    Write-Host "Auto-refreshing decrypted data with saved keys (quick_decrypt)..." -ForegroundColor Cyan
+    & $uvPath --directory $projectDir run python scripts\quick_decrypt.py
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Auto-refresh failed (non-fatal), serving existing decrypted data." -ForegroundColor Yellow
+    }
+    Write-Host ""
+}
+Write-Host "Starting WeChat MCP Server on http://localhost:8907/mcp ..."
 Write-Host "Press Ctrl+C to stop."
 Write-Host ""
-& $uvPath --directory $projectDir run python -m src.server --transport streamable-http --host 0.0.0.0 --port 8765
+& $uvPath --directory $projectDir run python -m src.server --transport streamable-http --host 0.0.0.0 --port 8907
