@@ -522,6 +522,14 @@ def export_voice(contact_name: str, local_id: int) -> str:
     return message_tools.export_voice(_get_reader(), contact_name, local_id)
 
 
+@mcp.tool()
+def _debug_inline_image(path: str) -> list:
+    """临时调试：验证图片内容块能否到达AI。传入本地图片路径。"""
+    from mcp.server.fastmcp.utilities.types import Image
+
+    return ["这是一个内联图片测试，请确认你是否真的看到了图片：", Image(path=path)]
+
+
 # ------------------------------------------------------------------ #
 # Tools：汇总统计                                                      #
 # ------------------------------------------------------------------ #

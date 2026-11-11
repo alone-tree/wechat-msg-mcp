@@ -8,6 +8,23 @@ from typing import Optional
 from ..db.reader import WeChatDBReader
 from ..db.models import Message
 
+IMG_INLINE_LIMIT = 5  # 单次查询最多内联图片数
+
+
+def _image_block(m: Message):
+    """图片消息 -> 解密后的 Image 内容块；失败返回 None。"""
+    from ..db.image import extract_image_bytes, image_media_type
+    from mcp.server.fastmcp.utilities.types import Image
+
+    if (m.local_type & 0xFFFF) != 3:
+        return None
+    data = extract_image_bytes(m.content)
+    if not data:
+        return None
+    mime = image_media_type(data)
+    fmt = "jpeg" if mime == "image/jpeg" else ("png" if mime == "image/png" else "webp")
+    return Image(data=data, format=fmt)
+
 
 def _message_line(reader: WeChatDBReader, m: Message, chat_name: str = "", time_fmt: str = "%Y-%m-%d %H:%M:%S", content_limit: int = 0) -> str:
     """单条消息的文本渲染：语音实时转写直接出文字，图片用短标记，其余原文。"""
@@ -110,10 +127,22 @@ def get_chat_history(
     chat_name = contact.display_name if contact else contact_name
 
     if output_format == "text":
-        lines = [f"=== 与「{chat_name}」的聊天记录，共 {len(messages)} 条 ===\n"]
+        blocks: list = [f"=== 与「{chat_name}」的聊天记录，共 {len(messages)} 条 ===\n"]
+        budget = IMG_INLINE_LIMIT
+        skipped = 0
         for m in messages:
-            lines.append(_message_line(reader, m))
-        return "\n".join(lines)
+            blocks.append(_message_line(reader, m))
+            if (m.local_type & 0xFFFF) == 3:
+                if budget > 0:
+                    img = _image_block(m)
+                    if img is not None:
+                        budget -= 1
+                        blocks.append(img)
+                        continue
+                skipped += 1
+        if skipped:
+            blocks.append(f"（另有 {skipped} 张图片未内联：缺图片密钥或超出单次上限）")
+        return blocks
     else:
         return json.dumps(
             {
@@ -238,10 +267,24 @@ def get_recent_messages(
         return f"最近 {days} 天的{scope}中没有找到消息。"
 
     if output_format == "text":
-        lines = [f"=== 最近 {days} 天 {scope} 消息，共 {len(messages)} 条（按时间倒序）===\n"]
+        blocks: list = [f"=== 最近 {days} 天 {scope} 消息，共 {len(messages)} 条（按时间倒序）===\n"]
+        budget = IMG_INLINE_LIMIT
+        skipped = 0
         for m in messages:
-            lines.append(_message_line(reader, m, chat_name=m.chat_username, time_fmt="%m-%d %H:%M", content_limit=80))
-        return "\n".join(lines)
+            contact = reader.get_contact(m.chat_username)
+            chat_name = contact.display_name if contact else m.chat_username
+            blocks.append(_message_line(reader, m, chat_name=chat_name, time_fmt="%m-%d %H:%M", content_limit=80))
+            if (m.local_type & 0xFFFF) == 3:
+                if budget > 0:
+                    img = _image_block(m)
+                    if img is not None:
+                        budget -= 1
+                        blocks.append(img)
+                        continue
+                skipped += 1
+        if skipped:
+            blocks.append(f"（另有 {skipped} 张图片未内联：缺图片密钥或超出单次上限）")
+        return blocks
     else:
         result = []
         for m in messages:
