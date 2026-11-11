@@ -96,6 +96,7 @@ def search_messages(
     end_date: Optional[str] = None,
     limit: int = 50,
     output_format: str = "text",
+    contact_names: Optional[list[str]] = None,
 ) -> str:
     """
     在聊天记录中搜索关键词。
@@ -106,31 +107,61 @@ def search_messages(
     :param end_date:   结束日期 YYYY-MM-DD
     :param limit:      最多返回条数（默认50）
     :param output_format: "text" 或 "json"
+    :param contact_names: 多会话清单（备注名/群名/群ID），与 contact_name 二选一，优先使用
     :return: 搜索结果字符串
     """
     limit = min(limit, 200)
 
-    messages = reader.search_messages(
-        keyword=keyword,
-        contact_name=contact_name,
-        start_date=start_date,
-        end_date=end_date,
-        limit=limit,
-    )
+    missing: list[str] = []
+    if contact_names:
+        usernames = []
+        for n in contact_names:
+            if not n:
+                continue
+            contact = reader.get_contact(n)
+            if contact:
+                usernames.append(contact.username)
+            else:
+                missing.append(n)
+        if not usernames:
+            scope = "、".join(contact_names)
+            return f"名单中的会话均未找到：{scope}。"
+        messages = reader.search_messages(
+            keyword=keyword,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            contact_usernames=usernames,
+        )
+    else:
+        messages = reader.search_messages(
+            keyword=keyword,
+            contact_name=contact_name,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
 
     if not messages:
-        scope = f"「{contact_name}」" if contact_name else "所有聊天"
-        return f"在{scope}中未找到包含「{keyword}」的消息。"
+        scope = f"「{contact_name}」" if contact_name else (
+            f"名单（{len(contact_names)}个会话）" if contact_names else "所有聊天"
+        )
+        suffix = f"（注意：以下名字未匹配到会话：{'、'.join(missing)}）" if missing else ""
+        return f"在{scope}中未找到包含「{keyword}」的消息。{suffix}"
+
+    missing_note = f"\n\n注意：名单中以下项未匹配到会话，已跳过：{'、'.join(missing)}" if missing else ""
 
     if output_format == "text":
-        lines = [f"=== 搜索「{keyword}」，共找到 {len(messages)} 条 ===\n"]
+        scope_label = "、".join(contact_names) if contact_names else (contact_name or "所有聊天")
+        lines = [f"=== 搜索「{keyword}」（范围：{scope_label}），共找到 {len(messages)} 条 ===\n"]
         for m in messages:
             contact = reader.get_contact(m.chat_username)
             chat_name = contact.display_name if contact else m.chat_username
             time_str = m.datetime.strftime("%Y-%m-%d %H:%M:%S")
             who = "我" if m.is_from_me else (m.sender_name or "对方")
-            lines.append(f"[{time_str}] [{chat_name}] {who}: {m.content}")
-        return "\n".join(lines)
+            tag = m.media_tag
+            lines.append(f"[{time_str}] [{chat_name}] {who}: {tag if tag else m.content}")
+        return "\n".join(lines) + missing_note
     else:
         result = []
         for m in messages:
@@ -138,11 +169,10 @@ def search_messages(
             d = m.to_dict()
             d["chat_name"] = contact.display_name if contact else m.chat_username
             result.append(d)
-        return json.dumps(
-            {"keyword": keyword, "total": len(result), "messages": result},
-            ensure_ascii=False,
-            indent=2,
-        )
+        payload = {"keyword": keyword, "total": len(result), "messages": result}
+        if missing:
+            payload["unmatched_names"] = missing
+        return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def get_recent_messages(
@@ -179,7 +209,8 @@ def get_recent_messages(
             chat_name = contact.display_name if contact else m.chat_username
             time_str = m.datetime.strftime("%m-%d %H:%M")
             who = "我" if m.is_from_me else (m.sender_name or "对方")
-            preview = m.content[:80].replace("\n", " ")
+            tag = m.media_tag
+            preview = tag if tag else m.content[:80].replace("\n", " ")
             lines.append(f"[{time_str}] [{chat_name}] {who}: {preview}")
         return "\n".join(lines)
     else:
@@ -194,3 +225,33 @@ def get_recent_messages(
             ensure_ascii=False,
             indent=2,
         )
+
+
+def export_voice(
+    reader: WeChatDBReader,
+    contact_name: str,
+    local_id: int,
+) -> str:
+    """
+    导出一条语音消息为 wav 临时文件，供音频转写工具转成文字。
+
+    文件是临时缓存（同一语音重复导出会复用已生成的文件），可随时整体清空。
+
+    :param contact_name: 会话名/群名/群ID
+    :param local_id: 消息的 local_id（文本流里 [语音 local_id=N] 标记中的 N）
+    :return: wav 路径与后续转写提示
+    """
+    contact = reader.get_contact(contact_name)
+    username = contact.username if contact else contact_name
+    result = reader.get_voice_wav(username, int(local_id))
+    if not result:
+        return (
+            f"未找到语音：会话={contact_name}，local_id={local_id}。"
+            "可能该消息不是语音，或语音数据尚未同步到本地库。"
+        )
+    return (
+        f"语音已导出：{result['wav_path']}\n"
+        f"时长：约{result['duration']:.0f}秒\n"
+        f"下一步：用音频转写 CLI（D:\\HermesSync\\tools\\audio-transcribe）转写该 wav，"
+        f"转写结果即语音的文字内容，看完后无需保留文件。"
+    )

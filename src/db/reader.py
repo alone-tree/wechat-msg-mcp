@@ -128,6 +128,56 @@ class WeChatDBReader:
         self._contact_id_cache.clear()
         self._load_contacts()
 
+    def get_voice_wav(self, chat_username: str, local_id: int) -> Optional[dict]:
+        """
+        导出一条语音消息为 wav 音频文件。
+
+        语音数据在 decrypted/message/media_*.db 的 VoiceInfo 表，
+        以 (chat_name_id, local_id) 定位，格式为 silk，用 pilk 解码为 wav。
+
+        :return: {"wav_path": str, "duration": 秒}；找不到或解码失败返回 None
+        """
+        import pilk
+
+        media_dbs = sorted((self.root / "message").glob("media_*.db"))
+        voice_blob = None
+        for db_path in media_dbs:
+            conn = self._open_db(db_path)
+            try:
+                row = conn.execute(
+                    "SELECT rowid FROM Name2Id WHERE user_name = ?", (chat_username,)
+                ).fetchone()
+                if not row:
+                    continue
+                voice_row = conn.execute(
+                    "SELECT voice_data FROM VoiceInfo WHERE chat_name_id = ? AND local_id = ?",
+                    (row[0], local_id),
+                ).fetchone()
+                if voice_row and voice_row[0]:
+                    voice_blob = voice_row[0]
+                    break
+            except sqlite3.OperationalError:
+                continue
+            finally:
+                conn.close()
+
+        if not voice_blob:
+            return None
+
+        out_dir = self.root / "exports" / "voice"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        chat_md5 = self._username_to_md5(chat_username)
+        silk_path = out_dir / f"voice_{chat_md5}_{local_id}.silk"
+        wav_path = out_dir / f"voice_{chat_md5}_{local_id}.wav"
+        silk_path.write_bytes(voice_blob)
+        try:
+            duration = pilk.decode(silk_path.as_posix(), wav_path.as_posix())
+        except Exception:
+            silk_path.unlink(missing_ok=True)
+            return None
+        silk_path.unlink(missing_ok=True)
+        return {"wav_path": str(wav_path), "duration": float(duration)}
+
     def _detect_my_username(self) -> None:
         """
         从 xwechat_files 目录名或 session 数据库推断自己的微信 username。
@@ -586,6 +636,7 @@ class WeChatDBReader:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         limit: int = 50,
+        contact_usernames: Optional[list[str]] = None,
     ) -> list[Message]:
         """
         全局关键词搜索。
@@ -595,23 +646,26 @@ class WeChatDBReader:
         :param start_date: 日期范围开始
         :param end_date: 日期范围结束
         :param limit: 最大返回条数
+        :param contact_usernames: 精确 username 清单（多群/多联系人定向），优先于 contact_name
         """
         start_ts, end_ts = self._ts_range(start_date, end_date)
         results: list[Message] = []
 
-        # 确定要搜索的 username 列表
-        target_md5 = ""
-        target_is_group = False
-        if contact_name:
+        # 确定要搜索的 username 列表；md5 -> username 映射用于绕过 Name2Id 反查缺卡
+        target_md5_map: dict[str, str] = {}
+        if contact_usernames:
+            target_usernames = set(contact_usernames)
+        elif contact_name:
             contact = self.get_contact(contact_name)
             if not contact:
                 return []
             target_usernames = {contact.username}
-            # Name2Id 反查可能缺卡（假阴性），定向搜索直接按 md5 定位 Msg_ 表
-            target_md5 = self._username_to_md5(contact.username)
-            target_is_group = contact.is_group
         else:
             target_usernames = None  # 全局
+
+        if target_usernames:
+            for u in target_usernames:
+                target_md5_map[self._username_to_md5(u)] = u
 
         for db_path in self._msg_db_paths:
             if len(results) >= limit:
@@ -628,8 +682,12 @@ class WeChatDBReader:
                     "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
                 ).fetchall()
 
-                # 定向搜索时该会话在本库不存在则直接跳过，省去全表遍历
-                if target_usernames and f"Msg_{target_md5}" not in {t for (t,) in tables}:
+                table_set = {t for (t,) in tables}
+
+                # 定向搜索时该批会话在本库都不存在则直接跳过，省去全表遍历
+                if target_usernames and not any(
+                    f"Msg_{md5}" in table_set for md5 in target_md5_map
+                ):
                     continue
 
                 # 定向搜索查询单个会话的完整数据；全局搜索限流每表 500 行
@@ -644,12 +702,13 @@ class WeChatDBReader:
 
                     if target_usernames:
                         # 命中条件：Name2Id 反查成功且匹配，或 md5 直接匹配
-                        if username not in target_usernames and md5_part != target_md5:
+                        if username not in target_usernames and md5_part not in target_md5_map:
                             continue
-                        # 反查缺卡时用联系人信息补全会话元数据
+                        # 反查缺卡时用清单里的 username 补全会话元数据
                         if not username:
-                            username = next(iter(target_usernames))
-                            is_group = target_is_group
+                            username = target_md5_map.get(md5_part) or next(
+                                iter(target_usernames)
+                            )
                         else:
                             is_group = username.endswith("@chatroom")
                     else:

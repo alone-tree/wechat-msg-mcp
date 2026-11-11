@@ -83,6 +83,16 @@ class Message:
             "chat_username": self.chat_username,
         }
 
+    @property
+    def media_tag(self) -> Optional[str]:
+        """语音/图片消息的简短标记（替代原始 XML，给出可操作的 local_id）"""
+        base = self.local_type & 0xFFFF
+        if base == 34:
+            return f"[语音 local_id={self.local_id} 可用export_voice导出转文字]"
+        if base == 3:
+            return f"[图片 local_id={self.local_id}]"
+        return None
+
     def format_text(self, sender_display: Optional[str] = None) -> str:
         """格式化为可读文本"""
         time_str = self.datetime.strftime("%Y-%m-%d %H:%M:%S")
@@ -93,8 +103,10 @@ class Message:
 
         if self.is_text:
             return f"[{time_str}] {who}: {self.content}"
-        else:
-            return f"[{time_str}] {who}: [{self.type_name}] {self.content[:100] if self.content else ''}"
+        tag = self.media_tag
+        if tag:
+            return f"[{time_str}] {who}: {tag}"
+        return f"[{time_str}] {who}: [{self.type_name}] {self.content[:100] if self.content else ''}"
 
 
 @dataclass

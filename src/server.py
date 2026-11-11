@@ -450,6 +450,7 @@ def get_chat_history(
 def search_messages(
     keyword: str,
     contact_name: str = "",
+    contact_names: list[str] | None = None,
     start_date: str = "",
     end_date: str = "",
     limit: int = 50,
@@ -461,6 +462,8 @@ def search_messages(
     Args:
         keyword: 搜索关键词（必填）
         contact_name: 限定搜索范围到某联系人或群，留空则全局搜索
+        contact_names: 多会话清单（备注名/群名/群ID列表），一次搜多个群或私聊；
+                    与 contact_name 二选一，传入时优先使用。未匹配到的名字会在结果中报告
         start_date: 开始日期 YYYY-MM-DD，留空不限
         end_date: 结束日期 YYYY-MM-DD，留空不限
         limit: 最多返回条数（默认 50，最大 200）
@@ -470,6 +473,7 @@ def search_messages(
         _get_reader(),
         keyword=keyword,
         contact_name=contact_name or None,
+        contact_names=contact_names,
         start_date=start_date or None,
         end_date=end_date or None,
         limit=limit,
@@ -504,6 +508,18 @@ def get_recent_messages(
         output_format=output_format,
         chat_names=chat_names,
     )
+
+
+@mcp.tool()
+def export_voice(contact_name: str, local_id: int) -> str:
+    """
+    导出一条语音消息为 wav 临时文件（供音频转写工具转成文字）。
+
+    Args:
+        contact_name: 会话名/群名/群ID
+        local_id: 消息的 local_id（聊天记录文本流里 [语音 local_id=N] 标记中的 N）
+    """
+    return message_tools.export_voice(_get_reader(), contact_name, local_id)
 
 
 # ------------------------------------------------------------------ #
