@@ -59,11 +59,11 @@ def _voice_display(reader: WeChatDBReader, m: Message) -> str | None:
         return "（语音 转写失败：数据缺失）"
     work_dir = os.path.join(str(reader.root), "exports", "voice")
     text, duration = transcribe_voice_blob(blob, work_dir)
-    dur = f"长{duration:.0f}秒 " if duration else ""
+    dur = f"长{duration:.0f}秒" if duration else ""
     if text is None:
-        return f"（语音 {dur}转写失败）"
+        return f"（语音 {dur} 转写失败）" if dur else "（语音 转写失败）"
     if text == "":
-        return f"（语音 {dur}无有效内容）"
+        return f"（语音 {dur} 无有效内容）" if dur else "（语音 无有效内容）"
     return f"（语音 {dur}）{text}"
 
 
