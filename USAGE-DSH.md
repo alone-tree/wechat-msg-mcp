@@ -18,11 +18,11 @@
 
 ## 三、DSH 侧接入
 
-1. 注册名 `wechat-msg-mcp`，URL `http://127.0.0.1:8907/mcp`（已持久注册，无需重复注册）。
-2. `mcp_load name=wechat-msg-mcp` → 拿到 9 个工具 → `mcp_call name=wechat-msg-mcp tool=<工具名> args={...}`。
+1. 注册名 `wechat-msg-mcp`，URL `http://127.0.0.1:18907/mcp`（已持久注册，无需重复注册）。
+2. `mcp_load name=wechat-msg-mcp` → 拿到 10 个工具 → `mcp_call name=wechat-msg-mcp tool=<工具名> args={...}`。
 3. **服务进程重启后，当前会话必须重新 mcp_load**（连接是会话级的）。
 
-## 四、工具速查（9 个）
+## 四、工具速查（10 个）
 
 | 工具 | 用途 | 关键参数 |
 |------|------|----------|
@@ -31,10 +31,13 @@
 | find_contact | 查单个联系人详情 | name |
 | get_sessions | 最近会话列表 | limit |
 | get_chat_history | 拉某会话聊天记录（时间升序） | contact_name, start_date, end_date, limit(≤500), offset |
-| search_messages | 全局/定向关键词搜索 | keyword, contact_name, start_date, end_date |
-| get_recent_messages | 跨会话拉最近 N 天 | days, group_only |
+| search_messages | 全局/定向关键词搜索；定向支持多会话清单 | keyword, contact_name 或 contact_names(多群/多私聊), start_date, end_date |
+| get_recent_messages | 跨会话拉最近 N 天；可按指定清单遍历 | days, group_only, chat_names(清单) |
+| export_voice | 导出一条语音为 wav 临时文件，供音频转写 CLI 转文字 | contact_name, local_id（文本流 [语音 local_id=N] 标记里的 N） |
 | summarize_chat | 单会话统计（条数/时段/成员排行） | contact_name, period |
 | chat_stats_overview | 跨会话活跃度总览 | period, top_n |
+
+语音/图片消息在文本流里显示为 `[语音 local_id=N 可用export_voice导出转文字]` / `[图片 local_id=N]`，不再吐原始 XML。语音导出产物在 `decrypted/exports/voice/`（gitignore 内的临时缓存，可随时整体清空；同一语音重复导出会复用已生成文件）。转写用 `python D:\HermesSync\tools\audio-transcribe\audio_transcribe.py <wav路径>`（需 SILICONFLOW_API_KEY，家里电脑 2026-11-11 尚未配置）。
 
 注意：日期格式 `YYYY-MM-DD`；返回为时间升序；群聊里自己的消息显示昵称（如"子柯"），私聊里显示"我"或昵称。
 
