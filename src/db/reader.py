@@ -709,8 +709,7 @@ class WeChatDBReader:
                             username = target_md5_map.get(md5_part) or next(
                                 iter(target_usernames)
                             )
-                        else:
-                            is_group = username.endswith("@chatroom")
+                        is_group = username.endswith("@chatroom")
                     else:
                         is_group = username.endswith("@chatroom")
 
