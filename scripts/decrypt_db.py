@@ -354,6 +354,42 @@ def find_db_for_key(key_label: str) -> list[Path]:
     """
     db_files = []
 
+    # 自定义数据目录（start.ps1 通过 WECHAT_FILES_DIR 注入）优先级最高，
+    # 覆盖注册表/默认路径找不到数据的情况（如数据盘迁移到 F:\xwechat_files）
+    env_base = os.environ.get("WECHAT_FILES_DIR", "").strip()
+    if env_base:
+        base = Path(env_base)
+        if base.exists():
+            # 只保留 keys.json 中登记了密钥的账号目录，避免对其他账号做无谓解密
+            key_suffixes: list[str] = []
+            keys_file = Path(__file__).parent.parent / "keys.json"
+            if keys_file.exists():
+                try:
+                    with open(keys_file) as _f:
+                        key_suffixes = [
+                            k.replace("\\", "/") for k in json.load(_f).keys()
+                        ]
+                except Exception:
+                    pass
+            for wxid_dir in base.iterdir():
+                if not wxid_dir.is_dir():
+                    continue
+                db_storage = wxid_dir / "db_storage"
+                if not db_storage.exists():
+                    continue
+                for pattern in [
+                    "contact/contact.db",
+                    "session/session.db",
+                    "message/message_*.db",
+                    "message/biz_message_*.db",
+                    "group/group.db",
+                ]:
+                    for p in db_storage.glob(pattern):
+                        if key_suffixes and not p.as_posix().endswith(tuple(key_suffixes)):
+                            continue
+                        db_files.append(p)
+            return db_files
+
     # --- 旧版 Mac 路径 ---
     if WECHAT_BASE.exists():
         for account_dir in WECHAT_BASE.iterdir():

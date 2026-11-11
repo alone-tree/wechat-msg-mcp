@@ -117,6 +117,7 @@ def _auto_sync_decrypt() -> None:
             p for p in all_dbs
             if p.parent.name.lower() == "contact"
             and p.stat().st_size >= 4096
+            and not p.name.startswith("contact_fts")
         ]
 
         needs_reload = False
