@@ -9,6 +9,7 @@ from ..db.reader import WeChatDBReader
 from ..db.models import Message
 
 IMG_INLINE_LIMIT = 5  # 单次查询最多内联图片数
+EMOJI_INLINE_LIMIT = 2  # 单次查询最多内联表情数（避免表情刷掉关键截图）
 
 
 def _image_block(m: Message):
@@ -24,6 +25,19 @@ def _image_block(m: Message):
     mime = image_media_type(data)
     fmt = "jpeg" if mime == "image/jpeg" else ("png" if mime == "image/png" else "webp")
     return Image(data=data, format=fmt)
+
+
+def _emoticon_block(m: Message):
+    """表情消息 -> 下载并解密后的 Image 内容块；失败返回 None。"""
+    from ..db.image import extract_emoticon_bytes
+    from mcp.server.fastmcp.utilities.types import Image
+
+    if (m.local_type & 0xFFFF) != 47:
+        return None
+    data = extract_emoticon_bytes(m.content)
+    if not data:
+        return None
+    return Image(data=data, format="jpeg")
 
 
 def _message_line(reader: WeChatDBReader, m: Message, chat_name: str = "", time_fmt: str = "%Y-%m-%d %H:%M:%S", content_limit: int = 0) -> str:
@@ -129,19 +143,29 @@ def get_chat_history(
     if output_format == "text":
         blocks: list = [f"=== 与「{chat_name}」的聊天记录，共 {len(messages)} 条 ===\n"]
         budget = IMG_INLINE_LIMIT
+        emoji_budget = EMOJI_INLINE_LIMIT
         skipped = 0
         for m in messages:
             blocks.append(_message_line(reader, m))
-            if (m.local_type & 0xFFFF) == 3:
-                if budget > 0:
-                    img = _image_block(m)
-                    if img is not None:
-                        budget -= 1
-                        blocks.append(img)
-                        continue
+            base = m.local_type & 0xFFFF
+            if base == 3 and budget > 0:
+                img = _image_block(m)
+                if img is not None:
+                    budget -= 1
+                    blocks.append(img)
+                    continue
+                skipped += 1
+            elif base == 47 and emoji_budget > 0:
+                emo = _emoticon_block(m)
+                if emo is not None:
+                    emoji_budget -= 1
+                    blocks.append(emo)
+                    continue
+                skipped += 1
+            elif base in (3, 47):
                 skipped += 1
         if skipped:
-            blocks.append(f"（另有 {skipped} 张图片未内联：缺图片密钥或超出单次上限）")
+            blocks.append(f"（另有 {skipped} 张图片/表情未内联：超出单次上限或解析失败）")
         return blocks
     else:
         return json.dumps(
@@ -269,21 +293,31 @@ def get_recent_messages(
     if output_format == "text":
         blocks: list = [f"=== 最近 {days} 天 {scope} 消息，共 {len(messages)} 条（按时间倒序）===\n"]
         budget = IMG_INLINE_LIMIT
+        emoji_budget = EMOJI_INLINE_LIMIT
         skipped = 0
         for m in messages:
             contact = reader.get_contact(m.chat_username)
             chat_name = contact.display_name if contact else m.chat_username
             blocks.append(_message_line(reader, m, chat_name=chat_name, time_fmt="%m-%d %H:%M", content_limit=80))
-            if (m.local_type & 0xFFFF) == 3:
-                if budget > 0:
-                    img = _image_block(m)
-                    if img is not None:
-                        budget -= 1
-                        blocks.append(img)
-                        continue
+            base = m.local_type & 0xFFFF
+            if base == 3 and budget > 0:
+                img = _image_block(m)
+                if img is not None:
+                    budget -= 1
+                    blocks.append(img)
+                    continue
+                skipped += 1
+            elif base == 47 and emoji_budget > 0:
+                emo = _emoticon_block(m)
+                if emo is not None:
+                    emoji_budget -= 1
+                    blocks.append(emo)
+                    continue
+                skipped += 1
+            elif base in (3, 47):
                 skipped += 1
         if skipped:
-            blocks.append(f"（另有 {skipped} 张图片未内联：缺图片密钥或超出单次上限）")
+            blocks.append(f"（另有 {skipped} 张图片/表情未内联：超出单次上限或解析失败）")
         return blocks
     else:
         result = []

@@ -85,10 +85,12 @@ class Message:
 
     @property
     def media_tag(self) -> Optional[str]:
-        """图片消息的简短标记（替代原始 XML）。语音的展示由渲染层实时转写。"""
+        """图片/表情消息的简短标记（替代原始 XML）。语音的展示由渲染层实时转写。"""
         base = self.local_type & 0xFFFF
         if base == 3:
             return f"[图片 local_id={self.local_id}]"
+        if base == 47:
+            return f"[表情 local_id={self.local_id}]"
         return None
 
     def format_text(self, sender_display: Optional[str] = None) -> str:

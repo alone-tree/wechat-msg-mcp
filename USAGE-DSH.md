@@ -40,9 +40,9 @@
 语音与图片（2026-11-11 起）：
 - 语音：sherpa-onnx + SenseVoiceSmall int8 纯本地转写，聊天记录里直接显示 `（语音 长23秒）转写文字`；转写失败显示 `（语音 长23秒 转写失败）`。转写缓存 `decrypted/exports/voice_transcribe_cache.json`（按内容指纹，可随时删）。模型在 `decrypted/models/sensevoice/`。
 - 图片：消息里的 `<md5>` → hardlink 登记库定位 dat 文件 → 账号级图片钥匙解密（原图/高清/缩略图自动降级）→ 标准化 JPEG（长边≤1600）→ 作为内容块内联到返回结果，AI 直接看到图。单次查询最多内联 5 张，多余显示 `（另有 N 张图片未内联）`。
+- 表情（type 47）：消息XML里的下载链接 → 拉取原始表情（GIF/PNG）→ aeskey 做 AES-CBC 解密（IV=密钥本身）→ 取首帧转 JPEG → 内联。单次查询单独限 2 张（避免表情刷掉关键截图）。链接过期或格式未知时只留 `[表情 local_id=N]` 标记。原图缓存 `decrypted/exports/emoticon/`。
 - 图片钥匙：`decrypted/media_keys.json`，由 `scripts/extract_image_key.py` 以管理员提取（微信看图时钥匙才驻留内存）。老图片若解不出会自动退到缩略图；微信重启后如大量图片解不出，重新点开几张图再跑一次提取脚本即可。
-- 语音/图片标记里的 `local_id` 仍保留在文本行里，便于指代具体消息。
-- 表情（type 47）仍是原始 XML，未做美化。
+- 语音/图片/表情标记里的 `local_id` 仍保留在文本行里，便于指代具体消息。
 
 注意：日期格式 `YYYY-MM-DD`；返回为时间升序；群聊里自己的消息显示昵称（如"子柯"），私聊里显示"我"或昵称。
 

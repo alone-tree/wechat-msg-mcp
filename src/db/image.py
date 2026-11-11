@@ -192,6 +192,98 @@ def decrypt_v2_dat(data: bytes, aes_key_str: str, xor_key: Optional[int]) -> Opt
     return None
 
 
+_EMOJI_AESKEY_RE = re.compile(r'aeskey\s*=\s*"([0-9a-fA-F]{32})"')
+_EMOJI_URL_RES = [
+    re.compile(r'encrypturl\s*=\s*"([^"]+)"'),  # 优先：解出来是 GIF/PNG 原始表情
+    re.compile(r'cdnurl\s*=\s*"([^"]+)"'),
+]
+_EMOJI_MD5_RE = re.compile(r'\bmd5\s*=\s*"([0-9a-f]{32})"')
+EMOTICON_CACHE_DIR = os.path.join(PROJECT_ROOT, "decrypted", "exports", "emoticon")
+
+
+def _parse_emoji_xml(content: str):
+    """表情消息XML -> (md5, aeskey, 下载链接列表)"""
+    a = _EMOJI_AESKEY_RE.search(content)
+    if not a:
+        return None
+    urls = []
+    for pat in _EMOJI_URL_RES:
+        m = pat.search(content)
+        if m:
+            urls.append(m.group(1).replace("&amp;", "&"))
+    if not urls:
+        return None
+    m = _EMOJI_MD5_RE.search(content)
+    return (m.group(1) if m else ""), a.group(1).lower(), urls
+
+
+def _decrypt_emoticon(data: bytes, aeskey_hex: str) -> Optional[bytes]:
+    """微信表情：AES-128-CBC，IV=密钥本身，PKCS7。"""
+    import re as _re
+
+    if not _re.fullmatch(r"[0-9a-f]{32}", aeskey_hex) or len(data) % 16 != 0:
+        return None
+    key = bytes.fromhex(aeskey_hex)
+    try:
+        try:
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+            d = Cipher(algorithms.AES(key), modes.CBC(key)).decryptor()
+            out = d.update(data) + d.finalize()
+        except ImportError:
+            from Crypto.Cipher import AES
+
+            out = AES.new(key, AES.MODE_CBC, key).decrypt(data)
+        return _strip_pkcs7(out)
+    except Exception:
+        return None
+
+
+def extract_emoticon_bytes(content: str) -> Optional[bytes]:
+    """表情消息 -> 标准化 JPEG（首帧）。失败（无链接/过期/未知格式）返回 None。"""
+    parsed = _parse_emoji_xml(content)
+    if not parsed:
+        return None
+    md5, aeskey, urls = parsed
+    os.makedirs(EMOTICON_CACHE_DIR, exist_ok=True)
+
+    cache_path = os.path.join(EMOTICON_CACHE_DIR, (md5 or "unknown") + ".bin")
+    raw = None
+    try:
+        if os.path.isfile(cache_path):
+            with open(cache_path, "rb") as f:
+                raw = f.read()
+    except OSError:
+        raw = None
+
+    if raw is None:
+        raw = b""
+        import urllib.request
+
+        for url in urls:
+            try:
+                with urllib.request.urlopen(url, timeout=15) as resp:
+                    blob = resp.read(5 * 1024 * 1024 + 1)
+                if len(blob) > 5 * 1024 * 1024:
+                    continue
+                dec = _decrypt_emoticon(blob, aeskey)
+                if dec and (dec[:3] == b"\xff\xd8\xff" or dec[:4] in (b"GIF8", b"\x89PNG", b"RIFF")):
+                    raw = dec
+                    break
+            except Exception:
+                continue
+        if raw:
+            try:
+                with open(cache_path, "wb") as f:
+                    f.write(raw)
+            except OSError:
+                pass
+
+    if not raw:
+        return None
+    return normalize_to_jpeg(raw)
+
+
 def extract_image_bytes(content: str) -> Optional[bytes]:
     """消息内容 -> 标准化 JPEG 字节（长边压到 1600px）。
 
