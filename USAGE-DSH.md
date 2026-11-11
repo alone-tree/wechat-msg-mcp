@@ -1,0 +1,84 @@
+# wechat-msg-mcp 使用说明（DSH 集成版）
+
+> **AI 注意：在 mcp_load 之前必须先读完本文档。** 本文包含启动方法、工具用法和排查手册，全部来自 2026-10-16 的实战踩坑，不要凭印象操作。
+
+---
+
+## 一、架构一句话
+
+服务进程（start.ps1 启动，监听 8907）→ mcp_register（地址簿，已持久注册）→ mcp_load（接线）→ mcp_call（传话）。
+服务进程与 DSH 是两个独立程序，靠 localhost HTTP 通信；服务没起，后面全部失败。
+
+## 二、启动服务（每次会话使用前的第 0 步）
+
+1. 运行 `D:\Github\wechat-msg-mcp\start.ps1`（**普通权限即可**，双击或 pwsh 均可）。
+2. 启动脚本会自动用 keys.json 刷新解密数据（约 1-2 分钟），然后监听 `http://localhost:8907/mcp`。
+3. 看到日志出现 "Application startup complete" 即就绪。服务是常驻进程，**已在跑就不要重复启动**。
+4. 检查是否就绪：`Get-NetTCPConnection -LocalPort 8907 -State Listen`
+
+## 三、DSH 侧接入
+
+1. 注册名 `wechat-msg-mcp`，URL `http://127.0.0.1:8907/mcp`（已持久注册，无需重复注册）。
+2. `mcp_load name=wechat-msg-mcp` → 拿到 9 个工具 → `mcp_call name=wechat-msg-mcp tool=<工具名> args={...}`。
+3. **服务进程重启后，当前会话必须重新 mcp_load**（连接是会话级的）。
+
+## 四、工具速查（9 个）
+
+| 工具 | 用途 | 关键参数 |
+|------|------|----------|
+| check_status | 诊断数据源是否就绪，遇问题先跑它 | 无 |
+| list_contacts | 列联系人/群，按关键词过滤 | keyword, include_groups |
+| find_contact | 查单个联系人详情 | name |
+| get_sessions | 最近会话列表 | limit |
+| get_chat_history | 拉某会话聊天记录（时间升序） | contact_name, start_date, end_date, limit(≤500), offset |
+| search_messages | 全局/定向关键词搜索 | keyword, contact_name, start_date, end_date |
+| get_recent_messages | 跨会话拉最近 N 天 | days, group_only |
+| summarize_chat | 单会话统计（条数/时段/成员排行） | contact_name, period |
+| chat_stats_overview | 跨会话活跃度总览 | period, top_n |
+
+注意：日期格式 `YYYY-MM-DD`；返回为时间升序；群聊里自己的消息显示昵称（如"子柯"），私聊里显示"我"或昵称。
+
+## 五、排查手册（按症状）
+
+**症状 1：mcp_load 报 connection refused / fetch failed**
+服务没起或端口不对。运行 start.ps1；确认 8907 在监听（见第二节第 4 条）。
+
+**症状 2：mcp_load 报 Not Found / 起服务时报端口占用（Errno 10048）**
+8907 被其他程序占用。用 `Get-NetTCPConnection -LocalPort 8907` 查占用进程；若是无关程序，换端口（改 start.ps1 末尾端口 + `mcp_register` 更新 URL）。
+
+**症状 3：查不到某个联系人/群（明明应该有）**
+多半是解密数据过期。重跑 start.ps1 自动刷新；确认项目根有 `keys.json`。
+
+**症状 4：quick_decrypt 刷新时全部 ❌**
+密钥失效（微信重装/大版本更新后会发生）。修复：**以管理员身份**运行 `scripts\decrypt_standalone.py`（需微信正在运行），重新提取密钥。
+
+**症状 5：解密输出写到了奇怪的位置**
+两个脚本都已改为遵守 `WECHAT_DECRYPTED_DIR` 环境变量（start.ps1 设为项目内 `decrypted/`）。若又出现，检查是否有第三方路径覆盖了该变量。
+
+**症状 6：发送者名字显示为无关联系人 / "未知发送者"**
+2026-10-16 已修复（reader.py 按 Name2Id 分库解析 real_sender_id）。若复现，检查 `src/db/reader.py` 的 `_resolve_local_sender` 和 `_build_local_sender_map`。
+
+**症状 7：某联系人能找到但拉不出消息**
+已知未解边缘 case（样本：Laura）。先确认会话列表里确有该会话，再用 username 直接查一次；仍无则归档为已知问题。
+
+## 六、已知限制（非 bug，不要当成故障修）
+
+1. 微信运行中未 checkpoint（落盘）的最后几条消息可能暂时缺失，之后刷新会出现。
+2. 链接/图片/系统消息会带出原始 XML 片段（可读性差但内容不失真）。
+3. 只解密 `F:\xwechat_files` 下有 keys.json 密钥的账号（当前=独树号）。其他账号不在数据源内。
+4. 密钥与聊天数据是敏感信息：`keys.json`、`decrypted/` 已被 .gitignore 排除，**严禁提交或外传**。
+5. 增量同步是惰性触发的：每次工具调用时检查源库 mtime（60 秒冷却），不是后台定时器。message 库与 contact.db 都在同步范围内（2026-11-11 起），新联系人/新群约 1 分钟内自动可见，无需重启服务。
+6. search_messages 定向搜索（contact_name 传群ID/群名）2026-11-11 已修复：直接按 md5 定位 Msg_ 表，不再依赖 Name2Id 反查，且定向时不做每表 500 行截断。全局搜索仍保留 500 行/表限流，只适合查近期消息。
+7. get_recent_messages 新增 chat_names 参数（会话清单），传入时按清单直查、不受"最近活跃前 30 个会话"限制，适合按固定学员名单遍历。
+
+## 七、关键文件地图
+
+| 文件 | 作用 |
+|------|------|
+| start.ps1 | 启动入口：自动刷新 + 起服务（端口 18907） |
+| keys.json | 解密密钥（敏感，勿提交勿外传） |
+| decrypted/ | 解密后的明文库（敏感，勿提交勿外传） |
+| scripts/quick_decrypt.py | 日常刷新（免管理员，用已存密钥） |
+| scripts/decrypt_standalone.py | 密钥提取+全量解密（需管理员+微信运行） |
+| src/server.py | MCP 服务本体（工具注册、reader 选择、增量同步） |
+| src/db/reader.py | SQLite 读取与渲染（发送者解析、定向搜索修复在此） |
