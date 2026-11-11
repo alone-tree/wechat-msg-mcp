@@ -30,14 +30,19 @@
 | list_contacts | 列联系人/群，按关键词过滤 | keyword, include_groups |
 | find_contact | 查单个联系人详情 | name |
 | get_sessions | 最近会话列表 | limit |
-| get_chat_history | 拉某会话聊天记录（时间升序） | contact_name, start_date, end_date, limit(≤500), offset |
+| get_chat_history | 拉某会话聊天记录（时间升序），语音直接转文字、图片直接内联 | contact_name, start_date, end_date, limit(≤500), offset |
 | search_messages | 全局/定向关键词搜索；定向支持多会话清单 | keyword, contact_name 或 contact_names(多群/多私聊), start_date, end_date |
-| get_recent_messages | 跨会话拉最近 N 天；可按指定清单遍历 | days, group_only, chat_names(清单) |
-| export_voice | 导出一条语音为 wav 临时文件，供音频转写 CLI 转文字 | contact_name, local_id（文本流 [语音 local_id=N] 标记里的 N） |
+| get_recent_messages | 跨会话拉最近 N 天；可按指定清单遍历，语音转文字+图片内联 | days, group_only, chat_names(清单) |
+| export_voice | 导出一条语音为 wav 临时文件（备用，正常不需要，聊天流里已直接出文字） | contact_name, local_id |
 | summarize_chat | 单会话统计（条数/时段/成员排行） | contact_name, period |
 | chat_stats_overview | 跨会话活跃度总览 | period, top_n |
 
-语音/图片消息在文本流里显示为 `[语音 local_id=N 可用export_voice导出转文字]` / `[图片 local_id=N]`，不再吐原始 XML。语音导出产物在 `decrypted/exports/voice/`（gitignore 内的临时缓存，可随时整体清空；同一语音重复导出会复用已生成文件）。转写用 `python D:\HermesSync\tools\audio-transcribe\audio_transcribe.py <wav路径>`（需 SILICONFLOW_API_KEY，家里电脑 2026-11-11 尚未配置）。
+语音与图片（2026-11-11 起）：
+- 语音：sherpa-onnx + SenseVoiceSmall int8 纯本地转写，聊天记录里直接显示 `（语音 长23秒）转写文字`；转写失败显示 `（语音 长23秒 转写失败）`。转写缓存 `decrypted/exports/voice_transcribe_cache.json`（按内容指纹，可随时删）。模型在 `decrypted/models/sensevoice/`。
+- 图片：消息里的 `<md5>` → hardlink 登记库定位 dat 文件 → 账号级图片钥匙解密（原图/高清/缩略图自动降级）→ 标准化 JPEG（长边≤1600）→ 作为内容块内联到返回结果，AI 直接看到图。单次查询最多内联 5 张，多余显示 `（另有 N 张图片未内联）`。
+- 图片钥匙：`decrypted/media_keys.json`，由 `scripts/extract_image_key.py` 以管理员提取（微信看图时钥匙才驻留内存）。老图片若解不出会自动退到缩略图；微信重启后如大量图片解不出，重新点开几张图再跑一次提取脚本即可。
+- 语音/图片标记里的 `local_id` 仍保留在文本行里，便于指代具体消息。
+- 表情（type 47）仍是原始 XML，未做美化。
 
 注意：日期格式 `YYYY-MM-DD`；返回为时间升序；群聊里自己的消息显示昵称（如"子柯"），私聊里显示"我"或昵称。
 

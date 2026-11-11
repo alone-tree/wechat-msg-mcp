@@ -43,7 +43,7 @@ elseif (Test-Path (Join-Path $projectDir "keys.json")) {
     }
     Write-Host ""
 }
-Write-Host "Starting WeChat MCP Server on http://localhost:8907/mcp ..."
+Write-Host "Starting WeChat MCP Server on http://localhost:18907/mcp ..."
 Write-Host "Press Ctrl+C to stop."
 Write-Host ""
-& $uvPath --directory $projectDir run python -m src.server --transport streamable-http --host 0.0.0.0 --port 8907
+& $uvPath --directory $projectDir run python -m src.server --transport streamable-http --host 0.0.0.0 --port 18907

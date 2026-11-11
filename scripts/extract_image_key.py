@@ -83,11 +83,28 @@ def get_wechat_pids():
 
 
 def find_attach_dirs():
+    """只取 keys.json 里登记了密钥的账号（主账号），避免拿别的账号的图做验证。"""
+    key_suffixes = []
+    keys_file = os.path.join(PROJECT_ROOT, "keys.json")
+    try:
+        with open(keys_file, encoding="utf-8") as f:
+            key_suffixes = [k.replace("\\", "/") for k in json.load(f).keys()]
+    except Exception:
+        pass
     dirs = []
     for wxid_dir in glob.glob(os.path.join(WECHAT_FILES_DIR, "*")):
         attach = os.path.join(wxid_dir, "msg", "attach")
-        if os.path.isdir(attach):
-            dirs.append(attach)
+        if not os.path.isdir(attach):
+            continue
+        pretty = attach.replace("\\", "/")
+        if key_suffixes and not any(
+            pretty.split("/xwechat_files/")[-1].startswith(
+                s.split("xwechat_files/")[-1].split("/")[0]
+            )
+            for s in key_suffixes
+        ):
+            continue
+        dirs.append(attach)
     return dirs
 
 
@@ -239,7 +256,7 @@ def main():
     pids = get_wechat_pids()
     log(f"微信进程: {pids}")
     aes_key = None
-    for f, head in thumbs[:5]:
+    for f, head in thumbs[:3]:
         ciphertext = head[15:31]
         log(f"用 {os.path.basename(f)} 的密文尝试...")
         for pid in pids:

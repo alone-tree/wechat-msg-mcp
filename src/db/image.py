@@ -33,7 +33,8 @@ _conn = None
 
 def load_keys() -> dict:
     global _keys_cache
-    if _keys_cache is not None:
+    # 空缓存时每次都尝试重读（服务启动时密钥文件可能尚未生成）
+    if _keys_cache:
         return _keys_cache
     try:
         with open(MEDIA_KEYS_PATH, encoding="utf-8") as f:
@@ -75,17 +76,17 @@ def _account_dirs() -> list[Path]:
     return out
 
 
-def find_image_dat(content: str) -> Optional[Path]:
-    """消息XML(或含md5的文本) -> 图片 dat 文件路径。"""
+def find_image_dat_bases(content: str) -> list[Path]:
+    """消息XML -> 该消息的图片文件候选路径（原图、高清、缩略图按优先级）。"""
     if not content:
-        return None
+        return []
     m = _IMG_MD5_RE.search(content) or _IMG_ATTR_MD5_RE.search(content)
     if not m:
-        return None
+        return []
     md5 = m.group(1)
     conn = _get_conn()
     if conn is None:
-        return None
+        return []
     try:
         with _lock:
             row = conn.execute(
@@ -93,19 +94,31 @@ def find_image_dat(content: str) -> Optional[Path]:
                 (md5,),
             ).fetchone()
             if not row:
-                return None
+                return []
             dmap = _dir_map(conn)
     except Exception:
-        return None
+        return []
     file_name, dir1, dir2 = row
     d1, d2 = dmap.get(dir1), dmap.get(dir2)
     if not d1 or not d2:
-        return None
+        return []
+    base = file_name[:-4] if file_name.endswith(".dat") else file_name
+    out = []
     for attach in _account_dirs():
-        p = attach / d1 / d2 / "Img" / file_name
-        if p.exists():
-            return p
-    return None
+        img_dir = attach / d1 / d2 / "Img"
+        for suffix in ("", "_h", "_t"):
+            p = img_dir / f"{base}{suffix}.dat"
+            if p.exists():
+                out.append(p)
+        if out:
+            break
+    return out
+
+
+def find_image_dat(content: str) -> Optional[Path]:
+    """兼容旧接口：返回第一个存在的图片文件。"""
+    hits = find_image_dat_bases(content)
+    return hits[0] if hits else None
 
 
 def _xor_bytes(data: bytes, key: int) -> bytes:
@@ -134,7 +147,7 @@ def _strip_pkcs7(data: bytes) -> bytes:
 
 
 def decrypt_v2_dat(data: bytes, aes_key_str: str, xor_key: Optional[int]) -> Optional[bytes]:
-    """V2 格式：15字节头 + AES-ECB 段 + 明文中段 + XOR 尾段。"""
+    """V2 格式：15字节头 + AES-ECB 段 + 16字节填充段（跳过）+ XOR 尾段。"""
     if data[:6] != _V2_SIG:
         return None
     try:
@@ -144,13 +157,7 @@ def decrypt_v2_dat(data: bytes, aes_key_str: str, xor_key: Optional[int]) -> Opt
     offset = 15
     aes_size_p = aes_size + (16 - aes_size % 16) % 16
     aes_data = data[offset : offset + aes_size_p]
-    rest = data[offset + aes_size_p :]
-    if xor_size > 0:
-        xor_data = data[-xor_size:]
-        raw_mid = rest[: len(rest) - xor_size] if len(rest) >= xor_size else b""
-    else:
-        xor_data = b""
-        raw_mid = rest
+    xor_data = data[-xor_size:] if xor_size > 0 else b""
 
     key = aes_key_str.encode("ascii", "ignore")[:16]
     try:
@@ -176,8 +183,8 @@ def decrypt_v2_dat(data: bytes, aes_key_str: str, xor_key: Optional[int]) -> Opt
     else:
         xored = b""
 
-    out = aes_plain + raw_mid + xored
-    # 魔数确认是图片
+    # 注意：AES 段与 XOR 段之间的 16 字节填充段不属于图像内容，直接跳过。
+    out = aes_plain + xored
     if out[:3] == b"\xff\xd8\xff":
         return out
     if out[:4] in (b"\x89PNG", b"RIFF", b"GIF8"):
@@ -186,17 +193,14 @@ def decrypt_v2_dat(data: bytes, aes_key_str: str, xor_key: Optional[int]) -> Opt
 
 
 def extract_image_bytes(content: str) -> Optional[bytes]:
-    """消息内容 -> 解密后的图片字节。失败（无钥匙/无文件/非V2）返回 None。"""
+    """消息内容 -> 标准化 JPEG 字节（长边压到 1600px）。
+
+    微信图片文件有原图/高清/缩略图多个变体，解密失败时自动降级尝试，
+    统一转标准 JPEG 保证客户端通用性，同时压缩尺寸控制上下文成本。
+    """
     keys = load_keys()
     aes_key = keys.get("image_aes_key")
     if not aes_key:
-        return None
-    dat = find_image_dat(content)
-    if not dat:
-        return None
-    try:
-        data = dat.read_bytes()
-    except OSError:
         return None
     xor_key = keys.get("image_xor_key")
     if xor_key is not None:
@@ -204,7 +208,48 @@ def extract_image_bytes(content: str) -> Optional[bytes]:
             xor_key = int(xor_key)
         except (TypeError, ValueError):
             xor_key = None
-    return decrypt_v2_dat(data, aes_key, xor_key)
+    for dat in find_image_dat_bases(content):
+        try:
+            data = dat.read_bytes()
+        except OSError:
+            continue
+        raw = decrypt_v2_dat(data, aes_key, xor_key)
+        if not raw:
+            continue
+        jpeg = normalize_to_jpeg(raw)
+        if jpeg:
+            return jpeg
+    return None
+
+
+def normalize_to_jpeg(raw: bytes, max_side: int = 1600) -> Optional[bytes]:
+    """任意格式图片字节 -> 标准 JPEG 字节（长边不超过 max_side，保持比例）。"""
+    import io
+
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        # 没有 Pillow 时原样返回（可能因格式变体被客户端拒收）
+        return raw
+    try:
+        im = PILImage.open(io.BytesIO(raw))
+        im.load()
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = PILImage.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+        w, h = im.size
+        if max(w, h) > max_side:
+            scale = max_side / max(w, h)
+            im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=82)
+        return buf.getvalue()
+    except Exception:
+        return None
 
 
 def image_media_type(data: bytes) -> str:

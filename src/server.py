@@ -423,7 +423,7 @@ def get_chat_history(
     limit: int = 100,
     offset: int = 0,
     output_format: str = "text",
-) -> str:
+):
     """
     获取与某联系人或群聊的聊天记录。
 
@@ -488,7 +488,7 @@ def get_recent_messages(
     limit: int = 100,
     output_format: str = "text",
     chat_names: list[str] | None = None,
-) -> str:
+):
     """
     获取最近 N 天的聊天消息（跨所有会话）。
 
@@ -520,14 +520,6 @@ def export_voice(contact_name: str, local_id: int) -> str:
         local_id: 消息的 local_id（聊天记录文本流里 [语音 local_id=N] 标记中的 N）
     """
     return message_tools.export_voice(_get_reader(), contact_name, local_id)
-
-
-@mcp.tool()
-def _debug_inline_image(path: str) -> list:
-    """临时调试：验证图片内容块能否到达AI。传入本地图片路径。"""
-    from mcp.server.fastmcp.utilities.types import Image
-
-    return ["这是一个内联图片测试，请确认你是否真的看到了图片：", Image(path=path)]
 
 
 # ------------------------------------------------------------------ #
