@@ -112,14 +112,21 @@ def _auto_sync_decrypt() -> None:
             and not p.name.startswith("message_fts")
             and not p.name.startswith("message_resource")
         ]
+        # contact.db 也纳入增量同步：新联系人/新群无需重启服务即可见
+        contact_dbs = [
+            p for p in all_dbs
+            if p.parent.name.lower() == "contact"
+            and p.stat().st_size >= 4096
+        ]
 
         needs_reload = False
+        needs_contact_reload = False
         key_refresh_needed = False  # 是否需要刷新密钥
 
         with tempfile.TemporaryDirectory(prefix="wechat_sync_") as tmp_dir_str:
             tmp_dir = Path(tmp_dir_str)
 
-            for src_path in message_dbs:
+            for src_path in message_dbs + contact_dbs:
                 src_key = str(src_path)
                 try:
                     src_mtime = src_path.stat().st_mtime
@@ -207,6 +214,8 @@ def _auto_sync_decrypt() -> None:
 
                 _db_mtimes[src_key] = src_mtime
                 needs_reload = True
+                if src_path.parent.name.lower() == "contact":
+                    needs_contact_reload = True
 
         # 解密失败：尝试自动刷新密钥（需要管理员权限）
         if key_refresh_needed and _IS_WINDOWS:
@@ -214,6 +223,9 @@ def _auto_sync_decrypt() -> None:
 
         if needs_reload and _reader is not None:
             _reader._discover_msg_dbs()
+
+        if needs_contact_reload and _reader is not None:
+            _reader.reload_contacts()
 
         _last_sync_time = now
 
@@ -470,6 +482,7 @@ def get_recent_messages(
     group_only: bool = False,
     limit: int = 100,
     output_format: str = "text",
+    chat_names: list[str] | None = None,
 ) -> str:
     """
     获取最近 N 天的聊天消息（跨所有会话）。
@@ -479,6 +492,8 @@ def get_recent_messages(
         group_only: 只返回群消息（默认 False）
         limit: 最多返回条数（默认 100）
         output_format: "text" 或 "json"
+        chat_names: 指定会话清单（备注名/群名/群ID列表），传入时只查这些会话，
+                    不受"最近活跃前30个会话"限制，适合按固定名单遍历
     """
     return message_tools.get_recent_messages(
         _get_reader(),
@@ -486,6 +501,7 @@ def get_recent_messages(
         group_only=group_only,
         limit=limit,
         output_format=output_format,
+        chat_names=chat_names,
     )
 
 

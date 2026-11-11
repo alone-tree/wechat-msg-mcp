@@ -122,6 +122,12 @@ class WeChatDBReader:
         finally:
             conn.close()
 
+    def reload_contacts(self) -> None:
+        """清空并重新加载联系人缓存（contact.db 增量同步刷新后调用）"""
+        self._contact_cache.clear()
+        self._contact_id_cache.clear()
+        self._load_contacts()
+
     def _detect_my_username(self) -> None:
         """
         从 xwechat_files 目录名或 session 数据库推断自己的微信 username。
@@ -594,11 +600,16 @@ class WeChatDBReader:
         results: list[Message] = []
 
         # 确定要搜索的 username 列表
+        target_md5 = ""
+        target_is_group = False
         if contact_name:
             contact = self.get_contact(contact_name)
             if not contact:
                 return []
             target_usernames = {contact.username}
+            # Name2Id 反查可能缺卡（假阴性），定向搜索直接按 md5 定位 Msg_ 表
+            target_md5 = self._username_to_md5(contact.username)
+            target_is_group = contact.is_group
         else:
             target_usernames = None  # 全局
 
@@ -617,6 +628,13 @@ class WeChatDBReader:
                     "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
                 ).fetchall()
 
+                # 定向搜索时该会话在本库不存在则直接跳过，省去全表遍历
+                if target_usernames and f"Msg_{target_md5}" not in {t for (t,) in tables}:
+                    continue
+
+                # 定向搜索查询单个会话的完整数据；全局搜索限流每表 500 行
+                row_limit = 100000 if target_usernames else 500
+
                 for (table_name,) in tables:
                     if len(results) >= limit:
                         break
@@ -624,10 +642,18 @@ class WeChatDBReader:
                     md5_part = table_name[4:]  # 去掉 "Msg_" 前缀
                     username = name2id.get(md5_part, "")
 
-                    if target_usernames and username not in target_usernames:
-                        continue
-
-                    is_group = username.endswith("@chatroom")
+                    if target_usernames:
+                        # 命中条件：Name2Id 反查成功且匹配，或 md5 直接匹配
+                        if username not in target_usernames and md5_part != target_md5:
+                            continue
+                        # 反查缺卡时用联系人信息补全会话元数据
+                        if not username:
+                            username = next(iter(target_usernames))
+                            is_group = target_is_group
+                        else:
+                            is_group = username.endswith("@chatroom")
+                    else:
+                        is_group = username.endswith("@chatroom")
 
                     try:
                         rows = conn.execute(
@@ -638,7 +664,7 @@ class WeChatDBReader:
                                 FROM {table_name}
                                 WHERE create_time >= ? AND create_time < ?
                                 ORDER BY local_id DESC
-                                LIMIT 500""",
+                                LIMIT {row_limit}""",
                             (start_ts, end_ts),
                         ).fetchall()
                     except sqlite3.OperationalError:
@@ -699,6 +725,7 @@ class WeChatDBReader:
         days: int = 7,
         group_only: bool = False,
         limit: int = 200,
+        chat_names: Optional[list[str]] = None,
     ) -> list[Message]:
         """
         获取最近 N 天的消息（按时间降序）
@@ -706,26 +733,45 @@ class WeChatDBReader:
         :param days: 最近几天
         :param group_only: 只返回群消息
         :param limit: 最大条数
+        :param chat_names: 指定会话清单（备注名/群名/username），传入时只查这些会话
         """
         since = datetime.now() - timedelta(days=days)
         start_date = since.strftime("%Y-%m-%d")
 
-        # 先从 sessions 获取最近活跃的会话
-        sessions = self.get_sessions(limit=100)
-        if group_only:
-            sessions = [s for s in sessions if s.is_group]
-
         all_msgs: list[Message] = []
-        for session in sessions[:30]:  # 最多查前30个会话
-            try:
-                msgs = self._query_messages_by_username(
-                    session.username,
-                    start_date=start_date,
-                    limit=50,
-                )
-                all_msgs.extend(msgs)
-            except Exception:
-                continue
+
+        if chat_names:
+            # 指定会话模式：逐个按 md5 直查，不依赖 session 活跃度排序
+            for name in chat_names:
+                if not name:
+                    continue
+                contact = self.get_contact(name)
+                username = contact.username if contact else name
+                try:
+                    msgs = self._query_messages_by_username(
+                        username,
+                        start_date=start_date,
+                        limit=50,
+                    )
+                    all_msgs.extend(msgs)
+                except Exception:
+                    continue
+        else:
+            # 先从 sessions 获取最近活跃的会话
+            sessions = self.get_sessions(limit=100)
+            if group_only:
+                sessions = [s for s in sessions if s.is_group]
+
+            for session in sessions[:30]:  # 最多查前30个会话
+                try:
+                    msgs = self._query_messages_by_username(
+                        session.username,
+                        start_date=start_date,
+                        limit=50,
+                    )
+                    all_msgs.extend(msgs)
+                except Exception:
+                    continue
 
         all_msgs.sort(key=lambda m: m.create_time, reverse=True)
         return all_msgs[:limit]

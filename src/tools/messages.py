@@ -151,6 +151,7 @@ def get_recent_messages(
     group_only: bool = False,
     limit: int = 100,
     output_format: str = "text",
+    chat_names: list[str] | None = None,
 ) -> str:
     """
     获取最近 N 天的聊天消息（跨所有会话）。
@@ -159,12 +160,15 @@ def get_recent_messages(
     :param group_only: 只返回群消息
     :param limit: 最多返回条数（默认100）
     :param output_format: "text" 或 "json"
+    :param chat_names: 指定会话清单（备注名/群名/群ID），传入时只查这些会话
     :return: 聊天记录字符串
     """
     limit = min(limit, 500)
-    messages = reader.get_recent_messages(days=days, group_only=group_only, limit=limit)
+    messages = reader.get_recent_messages(
+        days=days, group_only=group_only, limit=limit, chat_names=chat_names
+    )
 
-    scope = "群聊" if group_only else "所有会话"
+    scope = "指定会话" if chat_names else ("群聊" if group_only else "所有会话")
     if not messages:
         return f"最近 {days} 天的{scope}中没有找到消息。"
 
