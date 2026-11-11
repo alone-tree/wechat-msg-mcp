@@ -128,20 +128,9 @@ class WeChatDBReader:
         self._contact_id_cache.clear()
         self._load_contacts()
 
-    def get_voice_wav(self, chat_username: str, local_id: int) -> Optional[dict]:
-        """
-        导出一条语音消息为 wav 音频文件。
-
-        语音数据在 decrypted/message/media_*.db 的 VoiceInfo 表，
-        以 (chat_name_id, local_id) 定位，格式为 silk，用 pilk 解码为 wav。
-
-        :return: {"wav_path": str, "duration": 秒}；找不到或解码失败返回 None
-        """
-        import pilk
-
-        media_dbs = sorted((self.root / "message").glob("media_*.db"))
-        voice_blob = None
-        for db_path in media_dbs:
+    def get_voice_blob(self, chat_username: str, local_id: int) -> Optional[bytes]:
+        """取一条语音的原始数据（silk）。找不到返回 None。"""
+        for db_path in sorted((self.root / "message").glob("media_*.db")):
             conn = self._open_db(db_path)
             try:
                 row = conn.execute(
@@ -154,13 +143,25 @@ class WeChatDBReader:
                     (row[0], local_id),
                 ).fetchone()
                 if voice_row and voice_row[0]:
-                    voice_blob = voice_row[0]
-                    break
+                    return voice_row[0]
             except sqlite3.OperationalError:
                 continue
             finally:
                 conn.close()
+        return None
 
+    def get_voice_wav(self, chat_username: str, local_id: int) -> Optional[dict]:
+        """
+        导出一条语音消息为 wav 音频文件。
+
+        语音数据在 decrypted/message/media_*.db 的 VoiceInfo 表，
+        以 (chat_name_id, local_id) 定位，格式为 silk，用 pilk 解码为 wav。
+
+        :return: {"wav_path": str, "duration": 秒}；找不到或解码失败返回 None
+        """
+        import pilk
+
+        voice_blob = self.get_voice_blob(chat_username, local_id)
         if not voice_blob:
             return None
 

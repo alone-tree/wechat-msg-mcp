@@ -2,10 +2,29 @@
 消息相关 MCP Tools
 """
 import json
+import os
 from typing import Optional
 
 from ..db.reader import WeChatDBReader
 from ..db.models import Message
+
+
+def _message_line(reader: WeChatDBReader, m: Message, chat_name: str = "", time_fmt: str = "%Y-%m-%d %H:%M:%S", content_limit: int = 0) -> str:
+    """单条消息的文本渲染：语音实时转写直接出文字，图片用短标记，其余原文。"""
+    contact = reader.get_contact(m.chat_username) if not chat_name else None
+    name = chat_name or (contact.display_name if contact else m.chat_username)
+    time_str = m.datetime.strftime(time_fmt)
+    who = "我" if m.is_from_me else (m.sender_name or "对方")
+    prefix = f"[{name}] " if chat_name else ""
+    voice = _voice_display(reader, m)
+    tag = voice or m.media_tag
+    if tag:
+        content = tag
+    else:
+        content = m.content
+        if content_limit:
+            content = content[:content_limit].replace("\n", " ")
+    return f"[{time_str}] {prefix}{who}: {content}"
 
 
 def _messages_to_output(messages: list[Message], reader: WeChatDBReader, fmt: str = "json") -> str:
@@ -27,6 +46,25 @@ def _messages_to_output(messages: list[Message], reader: WeChatDBReader, fmt: st
             ensure_ascii=False,
             indent=2,
         )
+
+
+def _voice_display(reader: WeChatDBReader, m: Message) -> str | None:
+    """语音消息的展示文本：本地转写直接出文字，失败才标注。非语音返回 None。"""
+    if (m.local_type & 0xFFFF) != 34:
+        return None
+    from ..db.voice import transcribe_voice_blob
+
+    blob = reader.get_voice_blob(m.chat_username, m.local_id)
+    if not blob:
+        return "（语音 转写失败：数据缺失）"
+    work_dir = os.path.join(str(reader.root), "exports", "voice")
+    text, duration = transcribe_voice_blob(blob, work_dir)
+    dur = f"长{duration:.0f}秒 " if duration else ""
+    if text is None:
+        return f"（语音 {dur}转写失败）"
+    if text == "":
+        return f"（语音 {dur}无有效内容）"
+    return f"（语音 {dur}）{text}"
 
 
 def get_chat_history(
@@ -74,7 +112,7 @@ def get_chat_history(
     if output_format == "text":
         lines = [f"=== 与「{chat_name}」的聊天记录，共 {len(messages)} 条 ===\n"]
         for m in messages:
-            lines.append(m.format_text())
+            lines.append(_message_line(reader, m))
         return "\n".join(lines)
     else:
         return json.dumps(
@@ -157,10 +195,7 @@ def search_messages(
         for m in messages:
             contact = reader.get_contact(m.chat_username)
             chat_name = contact.display_name if contact else m.chat_username
-            time_str = m.datetime.strftime("%Y-%m-%d %H:%M:%S")
-            who = "我" if m.is_from_me else (m.sender_name or "对方")
-            tag = m.media_tag
-            lines.append(f"[{time_str}] [{chat_name}] {who}: {tag if tag else m.content}")
+            lines.append(_message_line(reader, m, chat_name=chat_name))
         return "\n".join(lines) + missing_note
     else:
         result = []
@@ -205,13 +240,7 @@ def get_recent_messages(
     if output_format == "text":
         lines = [f"=== 最近 {days} 天 {scope} 消息，共 {len(messages)} 条（按时间倒序）===\n"]
         for m in messages:
-            contact = reader.get_contact(m.chat_username)
-            chat_name = contact.display_name if contact else m.chat_username
-            time_str = m.datetime.strftime("%m-%d %H:%M")
-            who = "我" if m.is_from_me else (m.sender_name or "对方")
-            tag = m.media_tag
-            preview = tag if tag else m.content[:80].replace("\n", " ")
-            lines.append(f"[{time_str}] [{chat_name}] {who}: {preview}")
+            lines.append(_message_line(reader, m, chat_name=m.chat_username, time_fmt="%m-%d %H:%M", content_limit=80))
         return "\n".join(lines)
     else:
         result = []
