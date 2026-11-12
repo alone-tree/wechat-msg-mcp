@@ -103,6 +103,11 @@ def find_image_dat_bases(content: str) -> list[Path]:
     if not d1 or not d2:
         return []
     base = file_name[:-4] if file_name.endswith(".dat") else file_name
+    # 数据库里的 file_name 可能自带变体后缀（_h / _t），去掉以免拼出 _h_h.dat 这种空名
+    for vsuf in ("_h", "_t"):
+        if base.endswith(vsuf):
+            base = base[: -len(vsuf)]
+            break
     out = []
     for attach in _account_dirs():
         img_dir = attach / d1 / d2 / "Img"
