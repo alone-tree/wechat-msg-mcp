@@ -19,7 +19,7 @@
 ## 三、DSH 侧接入
 
 1. 注册名 `wechat-msg-mcp`，URL `http://127.0.0.1:18907/mcp`（已持久注册，无需重复注册）。
-2. `mcp_load name=wechat-msg-mcp` → 拿到 10 个工具 → `mcp_call name=wechat-msg-mcp tool=<工具名> args={...}`。
+2. `mcp_load name=wechat-msg-mcp` → 拿到 11 个工具 → `mcp_call name=wechat-msg-mcp tool=<工具名> args={...}`。
 3. **服务进程重启后，当前会话必须重新 mcp_load**（连接是会话级的）。
 
 ## 四、工具速查（10 个）
@@ -29,6 +29,7 @@
 | check_status | 诊断数据源是否就绪，遇问题先跑它 | 无 |
 | list_contacts | 列联系人/群，按关键词过滤 | keyword, include_groups |
 | find_contact | 查单个联系人详情 | name |
+| list_group_members | 查群成员及公开资料（备注名/微信昵称/自定义微信号/与你的关系/地区/签名） | group_name, only_with_wechat_id, limit |
 | get_sessions | 最近会话列表 | limit |
 | get_chat_history | 拉某会话聊天记录（时间升序），语音直接转文字、图片直接内联、视频给封面 | contact_name, start_date, end_date, limit(≤500), offset |
 | search_messages | 全局/定向关键词搜索；定向支持多会话清单（只给文字，不内联图片） | keyword, contact_name 或 contact_names(多群/多私聊), start_date, end_date |
@@ -90,6 +91,7 @@
 7. get_recent_messages 新增 chat_names 参数（会话清单），传入时按清单直查、不受"最近活跃前 30 个会话"限制，适合按固定学员名单遍历。
 8. 微信没下载到本地的图片/视频只有 CDN 引用，本地无副本。图片的 `cdnthumburl` 是 TLV blob（不是 URL），拼不出带鉴权的下载地址（实测各 endpoint 全 400）；企业微信转发的 `wwfile.work.weixin.qq.com` 直链要客户端会话（403）。所以这类图只能等用户在微信里点开一次，触发下载后再读。
 9. 极少数超大长截图（dat 头里 xor_size 恰好是 1MB 的那种）解不出原图，会退到微信渲染缓存或几十像素的缩略图，文本行会带标注说明。别把它当钥匙过期处理。
+10. 群成员资料的可用性受「是否好友」限制（2026-11-12 实测全库）：好友 983 人里 89% 有自定义微信号、86% 有备注；群内非好友 26843 人里 99.99% 只有微信昵称，仅 6 人有微信号、2 人有备注。性别在 contact.db 里根本没有对应字段（全库扫描无候选列），取不到。群昵称（群内显示名）本地未存，也在 `chat_room.ext_buffer` 里找不到。
 
 ## 七、关键文件地图
 

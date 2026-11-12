@@ -401,6 +401,28 @@ def find_contact(name: str) -> str:
 
 
 @mcp.tool()
+def list_group_members(
+    group_name: str,
+    only_with_wechat_id: bool = False,
+    limit: int = 500,
+) -> str:
+    """
+    列出某个群的成员及其公开资料（备注名、微信昵称、微信号、与你的关系）。
+
+    注意可用性：只有设置过自定义微信号的成员才有 wechat_id；
+    非好友成员本地通常只有微信昵称，备注和地区多为空；
+    群昵称（群内显示名）本地未存，取不到；成员列表是本地快照，退群或未加载的成员可能缺失。
+
+    Args:
+        group_name: 群名称或群ID（支持模糊匹配）
+        only_with_wechat_id: 只返回本地有自定义微信号的成员
+        limit: 最多返回条数（默认 500，微信单群上限）
+    """
+    return contact_tools.list_group_members(_get_reader(), group_name=group_name,
+                                            only_with_wechat_id=only_with_wechat_id, limit=limit)
+
+
+@mcp.tool()
 def get_sessions(limit: int = 30) -> str:
     """
     获取最近会话列表（类似微信首页聊天列表）。

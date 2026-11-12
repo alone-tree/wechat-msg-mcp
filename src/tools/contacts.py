@@ -59,6 +59,41 @@ def get_sessions(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+def list_group_members(
+    reader: WeChatDBReader,
+    group_name: str,
+    only_with_wechat_id: bool = False,
+    limit: int = 500,
+) -> str:
+    """
+    列出某个群的成员及其公开资料。
+
+    :param group_name: 群名称或群ID（支持模糊匹配）
+    :param only_with_wechat_id: 只要本地有自定义微信号的成员
+    :param limit: 最多返回条数（默认 500，即微信群上限）
+    :return: JSON 格式字符串
+    """
+    data = reader.get_group_members(group_name)
+    if "error" in data:
+        return json.dumps(data, ensure_ascii=False)
+
+    members = data["members"]
+    if only_with_wechat_id:
+        members = [m for m in members if m["wechat_id"]]
+    total = len(members)
+    members = members[:limit]
+
+    result = {
+        "group": data["group"],
+        "group_username": data["group_username"],
+        "total": total,
+        "with_wechat_id": data["with_wechat_id"],
+        "note": "有自定义微信号的成员才会填wechat_id；非好友成员本地通常只有微信昵称；群昵称（群内显示名）本地未存",
+        "members": members,
+    }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
 def find_contact(
     reader: WeChatDBReader,
     name: str,

@@ -424,6 +424,122 @@ class WeChatDBReader:
         result.sort(key=lambda c: (c.is_group, c.display_name))
         return result
 
+    @staticmethod
+    def _parse_contact_extra(blob: Optional[bytes]) -> dict:
+        """解析 contact.extra_buffer（protobuf）：取签名/省份/城市。取不到就返回空。"""
+
+        def _varint(buf, i):
+            v = 0
+            shift = 0
+            while i < len(buf):
+                b = buf[i]
+                i += 1
+                v |= (b & 0x7F) << shift
+                shift += 7
+                if not b & 0x80:
+                    break
+            return v, i
+
+        out: dict = {}
+        if not blob:
+            return out
+        try:
+            i = 0
+            while i < len(blob):
+                tag = blob[i]
+                field = tag >> 3
+                wire = tag & 7
+                i += 1
+                if wire == 0:
+                    _, i = _varint(blob, i)
+                elif wire == 2:
+                    ln = blob[i]
+                    i += 1
+                    val = blob[i : i + ln]
+                    i += ln
+                    if field in (4, 6, 7):
+                        try:
+                            out[field] = val.decode("utf-8")
+                        except UnicodeDecodeError:
+                            pass
+                else:
+                    break
+        except (IndexError, ValueError):
+            pass
+        return out
+
+    def get_group_members(self, name_or_id: str) -> dict:
+        """查群成员。返回 {"group": ..., "members": [...], "coverage": {...}}；非群返回 {"error": ...}。
+
+        数据来自 contact.db 的 chatroom_member（room_id, member_id）关联 contact 表。
+        字段可用性：备注名/微信昵称/微信号(alias)/地区/签名/头像。
+        非好友通常只有微信昵称，微信号与地区多为空（本地没拉取过）。
+        群昵称（群内显示名）本地没有存，取不到。
+        """
+        group = self.get_contact(name_or_id)
+        if not group or not group.is_group:
+            return {"error": f"未找到群聊: {name_or_id}"}
+        contact_db = self.root / "contact" / "contact.db"
+        if not contact_db.exists():
+            return {"error": "contact.db 不存在"}
+        try:
+            conn = self._open_db(contact_db)
+        except Exception as e:
+            return {"error": f"打开 contact.db 失败: {e}"}
+        try:
+            row = conn.execute("SELECT id FROM contact WHERE username=?", (group.username,)).fetchone()
+            if not row:
+                return {"error": f"群 {group.username} 在联系人表中无记录"}
+            room_id = row[0]
+            rows = conn.execute(
+                """
+                SELECT c.username, c.remark, c.nick_name, c.alias, c.local_type, c.flag, c.extra_buffer
+                FROM chatroom_member m LEFT JOIN contact c ON c.id = m.member_id
+                WHERE m.room_id = ?
+                """,
+                (room_id,),
+            ).fetchall()
+        except sqlite3.OperationalError as e:
+            return {"error": f"查询群成员失败: {e}"}
+        finally:
+            conn.close()
+
+        members = []
+        no_alias = 0
+        for username, remark, nick, alias, local_type, flag, extra in rows:
+            # local_type：1=好友/公众号，2=群，3=群内非好友，0=资料极少的未知
+            if local_type == 1 and not (username or "").startswith("gh_"):
+                relation = "好友"
+            elif local_type == 3:
+                relation = "群内非好友"
+            elif local_type == 2:
+                relation = "群"
+            else:
+                relation = "未知"
+            if not alias:
+                no_alias += 1
+            prof = self._parse_contact_extra(extra)
+            region = " ".join(x for x in (prof.get(6, ""), prof.get(7, "")) if x)
+            members.append(
+                {
+                    "wxid": username or "",
+                    "remark": remark or "",
+                    "nickname": nick or "",
+                    "wechat_id": alias or "",
+                    "relation": relation,
+                    "region": region,
+                    "signature": prof.get(4, ""),
+                }
+            )
+        members.sort(key=lambda x: (x["relation"] != "好友", x["remark"] or x["nickname"] or x["wxid"]))
+        return {
+            "group": group.display_name,
+            "group_username": group.username,
+            "total": len(members),
+            "with_wechat_id": len(members) - no_alias,
+            "members": members,
+        }
+
     def get_contact(self, name_or_id: str) -> Optional[Contact]:
         """
         按 username / 备注名 / 昵称查找联系人（模糊匹配，返回最佳匹配）
