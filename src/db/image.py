@@ -370,13 +370,13 @@ def _decode_dat(dat: Path, aes_key: str, xor_key) -> Optional[bytes]:
     return normalize_to_jpeg(raw)
 
 
-def extract_image_bytes(
+def extract_image_meta(
     content: str, chat_username: str = "", create_time: int = 0
-) -> Optional[bytes]:
-    """消息内容 -> 标准化 JPEG 字节（长边压到 1600px）。
+) -> tuple[Optional[bytes], str]:
+    """消息内容 -> (标准化 JPEG 字节, 来源标记)。
 
-    降级顺序按清晰度排：原图/高清 → 微信渲染缓存（wxgf，通常是完整分辨率）
-    → 缩略图（很小的 _t，只能看个大概）。统一转标准 JPEG，控制上下文成本。
+    来源标记：dat（原图/高清）、cache（微信渲染缓存）、thumb（小缩略图）。
+    降级顺序按清晰度排：原图/高清 → 渲染缓存 → 缩略图。
     """
     keys = load_keys()
     aes_key = keys.get("image_aes_key")
@@ -394,19 +394,85 @@ def extract_image_bytes(
                 continue
             jpeg = _decode_dat(dat, aes_key, xor_key)
             if jpeg:
-                return jpeg
+                return jpeg, "dat"
     cached = find_render_cache_image(chat_username, create_time)
     if cached:
         jpeg = normalize_to_jpeg(cached)
         if jpeg:
-            return jpeg
+            return jpeg, "cache"
     if aes_key:
         for dat in variants:
             if not dat.stem.endswith("_t"):
                 continue
             jpeg = _decode_dat(dat, aes_key, xor_key)
             if jpeg:
-                return jpeg
+                return jpeg, "thumb"
+    return None, ""
+
+
+def extract_image_bytes(
+    content: str, chat_username: str = "", create_time: int = 0
+) -> Optional[bytes]:
+    """兼容接口：只要图片字节。"""
+    return extract_image_meta(content, chat_username, create_time)[0]
+
+
+_VIDEO_MD5_RE = re.compile(r'<videomsg[^>]*\bmd5="([0-9a-f]{32})"')
+_VIDEO_DIRS = "video"
+
+
+def extract_video_cover(content: str) -> Optional[bytes]:
+    """视频消息（type 43）-> 封面 JPEG 字节。
+
+    本地封面是明文：msg/video/<年月>/<文件基名>.jpg（另有 _thumb.jpg 更小）。
+    文件名从 hardlink 的 video_hardlink_info_v4 按视频 md5 查得。
+    """
+    if not content:
+        return None
+    m = _VIDEO_MD5_RE.search(content)
+    if not m:
+        return None
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        with _lock:
+            row = conn.execute(
+                "SELECT file_name, dir1 FROM video_hardlink_info_v4 WHERE md5=? LIMIT 1",
+                (m.group(1),),
+            ).fetchone()
+            dmap = _dir_map(conn)
+    except Exception:
+        return None
+    if not row:
+        return None
+    file_name, dir1 = row
+    base = file_name
+    for suffix in (".mp4", ".mp4_raw", "_raw.mp4"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    if base.endswith("_raw"):
+        base = base[: -4]
+    month = dmap.get(dir1)
+    cand_dirs = []
+    for acc in Path(os.environ.get("WECHAT_FILES_DIR") or r"F:\xwechat_files").iterdir():
+        vroot = acc / "msg" / _VIDEO_DIRS
+        if not vroot.exists():
+            continue
+        if month:
+            cand_dirs.append(vroot / month)
+        cand_dirs.append(vroot)
+    for d in cand_dirs:
+        for name in (f"{base}.jpg", f"{base}_thumb.jpg"):
+            p = d / name
+            if p.exists():
+                try:
+                    jpeg = normalize_to_jpeg(p.read_bytes())
+                except OSError:
+                    continue
+                if jpeg:
+                    return jpeg
     return None
 
 

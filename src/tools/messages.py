@@ -10,21 +10,124 @@ from ..db.models import Message
 
 IMG_INLINE_LIMIT = 5  # 单次查询最多内联图片数
 EMOJI_INLINE_LIMIT = 2  # 单次查询最多内联表情数（避免表情刷掉关键截图）
+VIDEO_INLINE_LIMIT = 3  # 单次查询最多内联视频封面数
+THUMB_WARN_SIDE = 400  # 长边小于该值的图只可能是缩略图，标注提醒
+
+
+def _media_key(content: str) -> str:
+    """媒体去重键：图片/表情/视频消息里的 md5。"""
+    import re
+
+    m = re.search(r'\bmd5="([0-9a-f]{32})"', content or "")
+    if m:
+        return m.group(1)
+    m = re.search(r"<md5>([0-9a-f]{32})</md5>", content or "")
+    return m.group(1) if m else ""
+
+
+def _to_image(data: bytes):
+    from mcp.server.fastmcp.utilities.types import Image
+
+    from ..db.image import image_media_type
+
+    mime = image_media_type(data)
+    fmt = "jpeg" if mime == "image/jpeg" else ("png" if mime == "image/png" else "webp")
+    return Image(data=data, format=fmt)
+
+
+def _media_blocks(m: Message, state: dict) -> tuple[str, list]:
+    """一条消息的内联媒体处理。
+
+    返回 (行内附加标注, 要追加的 Image 块列表)。state 记录预算与已内联过的 md5，
+    同一条消息在多个群里重复出现时只内联一次，避免预算被同一张图刷光。
+    """
+    from ..db.image import extract_image_meta, extract_video_cover
+
+    base = m.local_type & 0xFFFF
+    if base not in (3, 43, 47):
+        return "", []
+    key = _media_key(m.content)
+    if key and key in state["seen"]:
+        state["dup"] += 1
+        return "", []
+    budget_key = {3: "img", 43: "video", 47: "emoji"}[base]
+    if state[budget_key] <= 0:
+        state["skipped"] += 1
+        return "", []
+
+    if base == 3:
+        data, source = extract_image_meta(m.content, m.chat_username, m.create_time)
+        if not data:
+            state["skipped"] += 1
+            return "", []
+        state[budget_key] -= 1
+        if key:
+            state["seen"].add(key)
+        note = ""
+        if source == "thumb":
+            from io import BytesIO
+
+            from PIL import Image as PILImage
+
+            try:
+                with PILImage.open(BytesIO(data)) as im:
+                    w, h = im.size
+            except Exception:
+                w, h = 0, 0
+            if max(w, h) < THUMB_WARN_SIDE:
+                note = f"（仅缩略图 {w}x{h}，原图未落本地，看不清细节）"
+        return note, [_to_image(data)]
+
+    if base == 43:
+        data = extract_video_cover(m.content)
+        if not data:
+            state["skipped"] += 1
+            return "", []
+        state[budget_key] -= 1
+        if key:
+            state["seen"].add(key)
+        return "（视频，仅封面图，无音频内容）", [_to_image(data)]
+
+    emo = _emoticon_block(m)
+    if emo is None:
+        state["skipped"] += 1
+        return "", []
+    state[budget_key] -= 1
+    if key:
+        state["seen"].add(key)
+    return "", [emo]
+
+
+def _new_media_state() -> dict:
+    return {
+        "img": IMG_INLINE_LIMIT,
+        "emoji": EMOJI_INLINE_LIMIT,
+        "video": VIDEO_INLINE_LIMIT,
+        "seen": set(),
+        "skipped": 0,
+        "dup": 0,
+    }
+
+
+def _media_trailer(state: dict) -> list[str]:
+    out = []
+    if state["skipped"]:
+        out.append(f"（另有 {state['skipped']} 张图片/表情/视频封面未内联：超出单次上限或本地无数据）")
+    if state["dup"]:
+        out.append(f"（另有 {state['dup']} 条重复媒体未重复内联：同一张图在多个会话出现）")
+    return out
 
 
 def _image_block(m: Message):
     """图片消息 -> 解密后的 Image 内容块；失败返回 None。"""
-    from ..db.image import extract_image_bytes, image_media_type
-    from mcp.server.fastmcp.utilities.types import Image
+    from ..db.image import extract_image_meta
 
     if (m.local_type & 0xFFFF) != 3:
         return None
-    data = extract_image_bytes(m.content, m.chat_username, m.create_time)
+    data, _source = extract_image_meta(m.content, m.chat_username, m.create_time)
     if not data:
         return None
-    mime = image_media_type(data)
-    fmt = "jpeg" if mime == "image/jpeg" else ("png" if mime == "image/png" else "webp")
-    return Image(data=data, format=fmt)
+    return _to_image(data)
 
 
 def _emoticon_block(m: Message):
@@ -40,7 +143,7 @@ def _emoticon_block(m: Message):
     return Image(data=data, format="jpeg")
 
 
-def _message_line(reader: WeChatDBReader, m: Message, chat_name: str = "", time_fmt: str = "%Y-%m-%d %H:%M:%S", content_limit: int = 0) -> str:
+def _message_line(reader: WeChatDBReader, m: Message, chat_name: str = "", time_fmt: str = "%Y-%m-%d %H:%M:%S", content_limit: int = 0, note: str = "") -> str:
     """单条消息的文本渲染：语音实时转写直接出文字，图片用短标记，其余原文。"""
     contact = reader.get_contact(m.chat_username) if not chat_name else None
     name = chat_name or (contact.display_name if contact else m.chat_username)
@@ -50,7 +153,7 @@ def _message_line(reader: WeChatDBReader, m: Message, chat_name: str = "", time_
     voice = _voice_display(reader, m)
     tag = voice or m.media_tag
     if tag:
-        content = tag
+        content = tag + note
     else:
         content = m.content
         if content_limit:
@@ -142,30 +245,12 @@ def get_chat_history(
 
     if output_format == "text":
         blocks: list = [f"=== 与「{chat_name}」的聊天记录，共 {len(messages)} 条 ===\n"]
-        budget = IMG_INLINE_LIMIT
-        emoji_budget = EMOJI_INLINE_LIMIT
-        skipped = 0
+        state = _new_media_state()
         for m in messages:
-            blocks.append(_message_line(reader, m))
-            base = m.local_type & 0xFFFF
-            if base == 3 and budget > 0:
-                img = _image_block(m)
-                if img is not None:
-                    budget -= 1
-                    blocks.append(img)
-                    continue
-                skipped += 1
-            elif base == 47 and emoji_budget > 0:
-                emo = _emoticon_block(m)
-                if emo is not None:
-                    emoji_budget -= 1
-                    blocks.append(emo)
-                    continue
-                skipped += 1
-            elif base in (3, 47):
-                skipped += 1
-        if skipped:
-            blocks.append(f"（另有 {skipped} 张图片/表情未内联：超出单次上限或解析失败）")
+            note, media = _media_blocks(m, state)
+            blocks.append(_message_line(reader, m, note=note))
+            blocks.extend(media)
+        blocks.extend(_media_trailer(state))
         return blocks
     else:
         return json.dumps(
@@ -292,32 +377,14 @@ def get_recent_messages(
 
     if output_format == "text":
         blocks: list = [f"=== 最近 {days} 天 {scope} 消息，共 {len(messages)} 条（按时间倒序）===\n"]
-        budget = IMG_INLINE_LIMIT
-        emoji_budget = EMOJI_INLINE_LIMIT
-        skipped = 0
+        state = _new_media_state()
         for m in messages:
             contact = reader.get_contact(m.chat_username)
             chat_name = contact.display_name if contact else m.chat_username
-            blocks.append(_message_line(reader, m, chat_name=chat_name, time_fmt="%m-%d %H:%M", content_limit=80))
-            base = m.local_type & 0xFFFF
-            if base == 3 and budget > 0:
-                img = _image_block(m)
-                if img is not None:
-                    budget -= 1
-                    blocks.append(img)
-                    continue
-                skipped += 1
-            elif base == 47 and emoji_budget > 0:
-                emo = _emoticon_block(m)
-                if emo is not None:
-                    emoji_budget -= 1
-                    blocks.append(emo)
-                    continue
-                skipped += 1
-            elif base in (3, 47):
-                skipped += 1
-        if skipped:
-            blocks.append(f"（另有 {skipped} 张图片/表情未内联：超出单次上限或解析失败）")
+            note, media = _media_blocks(m, state)
+            blocks.append(_message_line(reader, m, chat_name=chat_name, time_fmt="%m-%d %H:%M", content_limit=80, note=note))
+            blocks.extend(media)
+        blocks.extend(_media_trailer(state))
         return blocks
     else:
         result = []
