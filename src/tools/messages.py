@@ -19,7 +19,7 @@ def _image_block(m: Message):
 
     if (m.local_type & 0xFFFF) != 3:
         return None
-    data = extract_image_bytes(m.content)
+    data = extract_image_bytes(m.content, m.chat_username, m.create_time)
     if not data:
         return None
     mime = image_media_type(data)

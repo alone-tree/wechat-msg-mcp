@@ -289,33 +289,124 @@ def extract_emoticon_bytes(content: str) -> Optional[bytes]:
     return normalize_to_jpeg(raw)
 
 
-def extract_image_bytes(content: str) -> Optional[bytes]:
+def _cache_roots() -> list[Path]:
+    """账号目录下的 cache 根（微信把渲染过的图片临时缓存成 wxgf 放这里）。"""
+    base = Path(os.environ.get("WECHAT_FILES_DIR") or r"F:\xwechat_files")
+    out = []
+    if base.exists():
+        for p in base.iterdir():
+            if (p / "cache").exists():
+                out.append(p / "cache")
+    return out
+
+
+def decode_wxgf(data: bytes) -> Optional[bytes]:
+    """wxgf 容器 -> 首帧 JPEG 字节。
+
+    wxgf = 微信自定义图片容器，头部以 b"wxgf" 开头，随后是 HEVC Annex-B 裸流
+    （00 00 00 01 起始码起）。用 PyAV（自带 ffmpeg）解第一帧。
+    """
+    if not data:
+        return None
+    start = data.find(b"\x00\x00\x00\x01")
+    if start < 0 or b"wxgf" not in data[:16]:
+        return None
+    stream = data[start:]
+    try:
+        import io
+
+        import av
+        from PIL import Image as PILImage
+    except ImportError:
+        return None
+    try:
+        container = av.open(io.BytesIO(stream), format="hevc")
+        for frame in container.decode(video=0):
+            img = frame.to_image()
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=88)
+            return buf.getvalue()
+    except Exception:
+        return None
+    return None
+
+
+def find_render_cache_image(chat_username: str, create_time: int, window: int = 3) -> Optional[bytes]:
+    """微信渲染缓存兜底：cache/<年月>/Message/<md5(会话)>/ImageTemp/<类型>_<时间戳>_mid_temp_convert。
+
+    这是客户端把图片转换后留下的临时缓存（wxgf/HEVC），分辨率通常是完整的，
+    图片未落到 msg/attach 目录时可用。缓存本身会被微信清理，命中率取决于最近是否在客户端看过。
+    文件名里的时间戳等于消息 create_time，允许 window 秒误差。
+    """
+    if not chat_username or not create_time:
+        return None
+    import hashlib
+    import glob
+
+    chat_md5 = hashlib.md5(chat_username.encode("utf-8", "ignore")).hexdigest()
+    for root in _cache_roots():
+        for ts in range(int(create_time) - window, int(create_time) + window + 1):
+            pattern = os.path.join(str(root), "*", "Message", chat_md5, "ImageTemp", f"*_{ts}_*")
+            for path in glob.glob(pattern):
+                try:
+                    with open(path, "rb") as f:
+                        data = f.read()
+                except OSError:
+                    continue
+                jpeg = decode_wxgf(data)
+                if jpeg:
+                    return jpeg
+    return None
+
+
+def _decode_dat(dat: Path, aes_key: str, xor_key) -> Optional[bytes]:
+    try:
+        data = dat.read_bytes()
+    except OSError:
+        return None
+    raw = decrypt_v2_dat(data, aes_key, xor_key)
+    if not raw:
+        return None
+    return normalize_to_jpeg(raw)
+
+
+def extract_image_bytes(
+    content: str, chat_username: str = "", create_time: int = 0
+) -> Optional[bytes]:
     """消息内容 -> 标准化 JPEG 字节（长边压到 1600px）。
 
-    微信图片文件有原图/高清/缩略图多个变体，解密失败时自动降级尝试，
-    统一转标准 JPEG 保证客户端通用性，同时压缩尺寸控制上下文成本。
+    降级顺序按清晰度排：原图/高清 → 微信渲染缓存（wxgf，通常是完整分辨率）
+    → 缩略图（很小的 _t，只能看个大概）。统一转标准 JPEG，控制上下文成本。
     """
     keys = load_keys()
     aes_key = keys.get("image_aes_key")
-    if not aes_key:
-        return None
     xor_key = keys.get("image_xor_key")
     if xor_key is not None:
         try:
             xor_key = int(xor_key)
         except (TypeError, ValueError):
             xor_key = None
-    for dat in find_image_dat_bases(content):
-        try:
-            data = dat.read_bytes()
-        except OSError:
-            continue
-        raw = decrypt_v2_dat(data, aes_key, xor_key)
-        if not raw:
-            continue
-        jpeg = normalize_to_jpeg(raw)
+
+    variants = find_image_dat_bases(content)
+    if aes_key:
+        for dat in variants:
+            if dat.stem.endswith("_t"):
+                continue
+            jpeg = _decode_dat(dat, aes_key, xor_key)
+            if jpeg:
+                return jpeg
+    cached = find_render_cache_image(chat_username, create_time)
+    if cached:
+        jpeg = normalize_to_jpeg(cached)
         if jpeg:
             return jpeg
+    if aes_key:
+        for dat in variants:
+            if not dat.stem.endswith("_t"):
+                continue
+            jpeg = _decode_dat(dat, aes_key, xor_key)
+            if jpeg:
+                return jpeg
     return None
 
 
