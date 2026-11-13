@@ -30,12 +30,14 @@ def build_local_sender_map(conn: sqlite3.Connection) -> dict[int, str]:
 def build_name2id(conn: sqlite3.Connection) -> dict[str, str]:
     """本库 Name2Id：md5(user_name) -> user_name，用于定位会话分表。"""
     mapping: dict[str, str] = {}
-    try:
-        for _rid, name in conn.execute("SELECT rowid, userName FROM Name2Id"):
-            if name:
-                mapping[username_to_md5(name)] = name
-    except sqlite3.OperationalError:
-        pass
+    for col in ("user_name", "userName"):
+        try:
+            for _rid, name in conn.execute(f"SELECT rowid, {col} FROM Name2Id"):
+                if name:
+                    mapping[username_to_md5(name)] = name
+            break
+        except sqlite3.OperationalError:
+            continue
     return mapping
 
 

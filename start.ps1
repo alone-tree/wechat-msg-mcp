@@ -1,4 +1,4 @@
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+﻿$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "WARNING: Not running as Administrator." -ForegroundColor Yellow
     Write-Host "Automatic key refresh will not work without admin rights." -ForegroundColor Yellow
@@ -43,6 +43,12 @@ elseif (Test-Path (Join-Path $projectDir "keys.json")) {
     }
     Write-Host ""
 }
+Write-Host "Updating search index (incremental)..." -ForegroundColor Cyan
+& $uvPath --directory $projectDir run python -m src.cli index
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Index update failed (non-fatal), search may be stale." -ForegroundColor Yellow
+}
+Write-Host ""
 Write-Host "Starting WeChat MCP Server on http://localhost:18907/mcp ..."
 Write-Host "Press Ctrl+C to stop."
 Write-Host ""

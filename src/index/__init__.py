@@ -260,6 +260,36 @@ def query(
         conn.close()
 
 
+def tables_in_range(
+    src: LocalSource,
+    lo: int | None = None,
+    hi: int | None = None,
+    mains: set[int] | None = None,
+) -> list[tuple[str, str]] | None:
+    """按时间窗与主类型筛出候选分表，索引不存在时返回 None 让调用方全扫。"""
+    path = index_path(src)
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        where, args = [], []
+        if lo is not None:
+            where.append("ts >= ?")
+            args.append(lo)
+        if hi is not None:
+            where.append("ts <= ?")
+            args.append(hi)
+        if mains:
+            where.append("(type & 4294967295) IN (%s)" % ",".join("?" * len(mains)))
+            args.extend(sorted(mains))
+        sql = "SELECT DISTINCT db, tbl FROM msg_meta"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return [(r[0], r[1]) for r in conn.execute(sql, args)]
+    finally:
+        conn.close()
+
+
 def count(src: LocalSource) -> dict:
     path = index_path(src)
     if not path.exists():

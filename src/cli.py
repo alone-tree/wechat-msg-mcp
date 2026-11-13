@@ -156,6 +156,16 @@ def cmd_index(args) -> int:
     return 0 if obj.get("ok") else 1
 
 
+def cmd_report(args) -> int:
+    from .report import run as run_report
+
+    svc = _service(args)
+    out = args.out or f"reports/{args.year}"
+    obj = run_report(svc.src, args.year, out)
+    _print(obj, True)
+    return 0 if obj.get("ok") else 1
+
+
 def cmd_export(args) -> int:
     """导出：按条件循环翻页，边取边写。"""
     from . import export
@@ -264,6 +274,11 @@ def build_parser() -> argparse.ArgumentParser:
     ix = sub.add_parser("index", parents=[common], help="构建或更新全文索引")
     ix.add_argument("--rebuild", action="store_true")
     ix.set_defaults(func=cmd_index)
+
+    rp = sub.add_parser("report", parents=[common], help="年度报告")
+    rp.add_argument("--year", type=int, required=True)
+    rp.add_argument("--out", default="")
+    rp.set_defaults(func=cmd_report)
     return p
 
 
