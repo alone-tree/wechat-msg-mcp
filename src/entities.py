@@ -52,7 +52,7 @@ def load_contacts(src: LocalSource) -> list[dict]:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(contact)")}
         nick_col = "nick_name" if "nick_name" in cols else ("nickname" if "nickname" in cols else None)
         select = ["id", "username", "local_type"]
-        for c in ("alias", "remark", "description"):
+        for c in ("alias", "remark", "description", "extra_buffer"):
             if c in cols:
                 select.append(c)
         if nick_col:
@@ -63,6 +63,7 @@ def load_contacts(src: LocalSource) -> list[dict]:
         out = []
         for r in rows:
             username = r["username"] or ""
+            extra = _extra_fields(r["extra_buffer"] if "extra_buffer" in r.keys() else None)
             out.append(
                 {
                     "id": r["id"],
@@ -74,11 +75,91 @@ def load_contacts(src: LocalSource) -> list[dict]:
                     "remark": (r["remark"] if "remark" in r.keys() else "") or "",
                     "nickname": (r[nick_col] if nick_col else "") or "",
                     "description": (r["description"] if "description" in r.keys() else "") or "",
+                    "region": extra.get("region", ""),
+                    "add_time": extra.get("add_time", ""),
                 }
             )
         return out
     finally:
         conn.close()
+
+
+def _extra_fields(blob) -> dict:
+    """解析 contact.extra_buffer 的 protobuf，取地区与添加时间。
+
+    实测字段：5=国家、6=省、7=市（英文名），41=添加时间 epoch。
+    解析失败一律返回空，不抛错。
+    """
+    if not blob or not isinstance(blob, (bytes, bytearray)):
+        return {}
+    fields: dict[int, list] = {}
+    buf = bytes(blob)
+    i = 0
+    n = len(buf)
+    try:
+        while i < n:
+            key = 0
+            shift = 0
+            while True:
+                b = buf[i]
+                i += 1
+                key |= (b & 0x7F) << shift
+                shift += 7
+                if not b & 0x80:
+                    break
+            fn, wt = key >> 3, key & 7
+            if wt == 0:
+                v = 0
+                shift = 0
+                while True:
+                    b = buf[i]
+                    i += 1
+                    v |= (b & 0x7F) << shift
+                    shift += 7
+                    if not b & 0x80:
+                        break
+                fields.setdefault(fn, []).append(v)
+            elif wt == 2:
+                ln = 0
+                shift = 0
+                while True:
+                    b = buf[i]
+                    i += 1
+                    ln |= (b & 0x7F) << shift
+                    shift += 7
+                    if not b & 0x80:
+                        break
+                fields.setdefault(fn, []).append(buf[i : i + ln])
+                i += ln
+            elif wt == 5:
+                i += 4
+            elif wt == 1:
+                i += 8
+            else:
+                break
+    except Exception:
+        return {}
+
+    def text(fn: int) -> str:
+        for v in fields.get(fn, []):
+            if isinstance(v, (bytes, bytearray)):
+                try:
+                    s = v.decode("utf-8")
+                except Exception:
+                    continue
+                if s and all(ord(ch) >= 0x20 for ch in s):
+                    return s
+        return ""
+
+    province = text(6)
+    city = text(7)
+    region = " ".join(x for x in (province, city) if x)
+    add_time = ""
+    for v in fields.get(41, []):
+        if isinstance(v, int) and 1000000000 < v < 2200000000:
+            add_time = _fmt(v)
+            break
+    return {"region": region, "add_time": add_time}
 
 
 def group_meta(src: LocalSource) -> dict[str, dict]:
@@ -161,6 +242,8 @@ def _entity(row: dict, gmeta: dict, smeta: dict) -> dict:
         "nickname": row.get("nickname", ""),
         "alias": row.get("alias", ""),
         "is_friend": row.get("is_friend"),
+        "region": row.get("region", ""),
+        "add_time": row.get("add_time", ""),
         "member_count": g.get("member_count"),
         "owner_id": g.get("owner"),
         "notice": g.get("notice", ""),

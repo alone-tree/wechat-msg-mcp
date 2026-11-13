@@ -157,6 +157,46 @@ def cmd_index(args) -> int:
     return 0 if obj.get("ok") else 1
 
 
+def cmd_moments(args) -> int:
+    svc = _service(args)
+    obj = svc.list_moments(
+        author=args.author,
+        keyword=args.keyword,
+        since=args.since,
+        until=args.until,
+        limit=args.limit,
+        offset=args.offset,
+    )
+    if args.json:
+        _print(obj, True)
+        return 0
+    print(f"total={obj['total']} returned={obj['returned']} has_more={obj['has_more']} data_cutoff={obj['data_cutoff']}")
+    for m in obj["moments"]:
+        print(f"[{m['time']}] {m['author_name']}: {(m['text'] or '')[:80]} likes={m['like_count']} comments={m['comment_count']}")
+    return 0
+
+
+def cmd_favorites(args) -> int:
+    svc = _service(args)
+    obj = svc.list_favorites(
+        type=args.type,
+        keyword=args.keyword,
+        tag=args.tag,
+        since=args.since,
+        until=args.until,
+        limit=args.limit,
+        offset=args.offset,
+    )
+    if args.json:
+        _print(obj, True)
+        return 0
+    print(f"total={obj['total']} returned={obj['returned']} has_more={obj['has_more']} data_cutoff={obj['data_cutoff']}")
+    for it in obj["items"]:
+        label = it["title"] or it["desc"]
+        print(f"[{it['time']}] {it['type']} {label[:60]} {it['url'][:60]}")
+    return 0
+
+
 def cmd_report(args) -> int:
     from .report import run as run_report
 
@@ -281,6 +321,25 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--year", type=int, required=True)
     rp.add_argument("--out", default="")
     rp.set_defaults(func=cmd_report)
+
+    mo = sub.add_parser("moments", parents=[common], help="朋友圈")
+    mo.add_argument("--author", default="")
+    mo.add_argument("--keyword", default="")
+    mo.add_argument("--since", default="")
+    mo.add_argument("--until", default="")
+    mo.add_argument("--limit", type=int, default=20)
+    mo.add_argument("--offset", type=int, default=0)
+    mo.set_defaults(func=cmd_moments)
+
+    fa = sub.add_parser("favorites", parents=[common], help="收藏")
+    fa.add_argument("--type", default="")
+    fa.add_argument("--keyword", default="")
+    fa.add_argument("--tag", default="")
+    fa.add_argument("--since", default="")
+    fa.add_argument("--until", default="")
+    fa.add_argument("--limit", type=int, default=20)
+    fa.add_argument("--offset", type=int, default=0)
+    fa.set_defaults(func=cmd_favorites)
     return p
 
 

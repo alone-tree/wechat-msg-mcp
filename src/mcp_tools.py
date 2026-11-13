@@ -172,3 +172,69 @@ def register(mcp, get_service) -> None:
         if action == "sync":
             return _dumps(svc.refresh())
         return _dumps(svc.status())
+
+    @mcp.tool()
+    def list_moments(
+        author: str = "",
+        keyword: str = "",
+        since_date: str = "",
+        until_date: str = "",
+        limit: int = 20,
+        offset: int = 0,
+        with_interactions: bool = True,
+    ) -> str:
+        """查朋友圈动态，可带评论与点赞。
+
+        Args:
+            author: 只看某人的朋友圈，留空为全部（含自己）
+            keyword: 正文关键词
+            since_date: 开始日期 YYYY-MM-DD
+            until_date: 结束日期 YYYY-MM-DD
+            limit: 返回条数上限
+            offset: 分页偏移
+            with_interactions: 是否附带评论与点赞
+        """
+        return _dumps(
+            get_service().list_moments(
+                author=author,
+                keyword=keyword,
+                since=since_date,
+                until=until_date,
+                limit=limit,
+                offset=offset,
+                with_interactions=with_interactions,
+            )
+        )
+
+    @mcp.tool()
+    def list_favorites(
+        type: str = "",
+        keyword: str = "",
+        tag: str = "",
+        since_date: str = "",
+        until_date: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> str:
+        """查收藏条目。
+
+        Args:
+            type: text/image/voice/video/link/file/chat_record/note，留空为全部
+            keyword: 标题与描述关键词
+            tag: 收藏标签名
+            since_date: 收藏时间下界 YYYY-MM-DD
+            until_date: 收藏时间上界 YYYY-MM-DD
+            limit: 返回条数上限
+            offset: 分页偏移
+        """
+        return _dumps(
+            get_service().list_favorites(
+                type=type,
+                keyword=keyword,
+                tag=tag,
+                since=since_date,
+                until=until_date,
+                limit=limit,
+                offset=offset,
+            )
+        )

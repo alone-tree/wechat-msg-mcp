@@ -53,6 +53,17 @@ class Service:
     def search(self, query: str, **kwargs) -> dict:
         return search_mod.search(self.src, query, **kwargs)
 
+    # 朋友圈与收藏
+    def list_moments(self, **kwargs) -> dict:
+        from .moments import list_moments
+
+        return list_moments(self.src, **kwargs)
+
+    def list_favorites(self, **kwargs) -> dict:
+        from .favorites import list_favorites
+
+        return list_favorites(self.src, **kwargs)
+
     # 同步与索引
     def status(self) -> dict:
         info = sync_mod.status(self.src)
