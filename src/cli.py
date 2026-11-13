@@ -54,7 +54,7 @@ def cmd_list(args) -> int:
         limit=args.limit,
         offset=args.offset,
     )
-    _print(obj, args.json, ["id", "kind", "name", "member_count", "last_active_at", "unread"])
+    _print(obj, args.json, ["id", "kind", "name", "member_count", "owner_name", "last_active_at", "unread"])
     return 0
 
 

@@ -212,6 +212,12 @@ def list_entities(
             rows = [r for r in rows if r["kind"] == "person"]
 
     kw = keyword.strip().lower()
+    for r in rows:
+        oid = r.get("owner_id") or ""
+        owner = by_user.get(oid) if oid else None
+        r["owner_name"] = (
+            (owner.get("remark") or owner.get("nickname") or oid) if owner else ""
+        )
     if kw:
         rows = [
             r
