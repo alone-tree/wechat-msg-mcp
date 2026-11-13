@@ -105,7 +105,19 @@ def register(mcp, get_service) -> None:
             exported = export.write_rows(obj.get("messages", []), fmt=format, prefix="messages")
             obj["export"] = exported
             obj["messages"] = obj.get("messages", [])[:3]
-        return _dumps(obj)
+            return _dumps(obj)
+        text = _dumps(obj)
+        if len(text) > 80000 or obj.get("returned", 0) >= 200:
+            from . import export
+
+            exported = export.write_rows(obj.get("messages", []), fmt=format, prefix="messages")
+            obj["messages"] = obj.get("messages", [])[:3]
+            obj["auto_export"] = {
+                **exported,
+                "reason": "返回体过大，已自动落盘，仅保留前 3 条预览",
+            }
+            text = _dumps(obj)
+        return text
 
     @mcp.tool()
     def relations(

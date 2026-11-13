@@ -42,6 +42,7 @@ class Service:
                 targets=kwargs.get("targets"),
                 since=kwargs.get("since", ""),
                 until=kwargs.get("until", ""),
+                limit=kwargs.get("limit", 200),
             )
         if kind == "activity":
             return relations.activity(

@@ -260,6 +260,44 @@ def query(
         conn.close()
 
 
+def count_query(
+    src: LocalSource,
+    text: str,
+    chat_ids: list[str] | None = None,
+    since: int | None = None,
+    until: int | None = None,
+) -> int:
+    """与 query 同条件的命中总数，用于 total 与分页。"""
+    path = index_path(src)
+    if not path.exists():
+        return 0
+    match = _match_expr(text)
+    if not match:
+        return 0
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        where = ["msg_fts MATCH ?"]
+        args: list = [match]
+        if chat_ids:
+            where.append("m.chat_id IN (%s)" % ",".join("?" * len(chat_ids)))
+            args.extend(chat_ids)
+        if since:
+            where.append("m.ts >= ?")
+            args.append(since)
+        if until:
+            where.append("m.ts <= ?")
+            args.append(until)
+        sql = (
+            "SELECT COUNT(*) FROM msg_fts JOIN msg_meta m ON m.rowid = msg_fts.rowid"
+            f" WHERE {' AND '.join(where)}"
+        )
+        return int(conn.execute(sql, args).fetchone()[0])
+    except sqlite3.OperationalError:
+        return 0
+    finally:
+        conn.close()
+
+
 def tables_in_range(
     src: LocalSource,
     lo: int | None = None,

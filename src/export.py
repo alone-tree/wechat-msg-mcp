@@ -79,8 +79,23 @@ def write_rows(
     total = 0
     if not rows:
         path = out / _name(prefix, fmt)
-        path.write_text("", encoding="utf-8")
-        return {"exported": True, "path": str(path), "files": [str(path)], "rows": 0, "bytes": 0}
+        if fmt == "csv":
+            path.write_text(render_csv([], columns or _MESSAGE_COLUMNS), encoding="utf-8-sig", newline="")
+        elif fmt == "json":
+            path.write_text("[]", encoding="utf-8")
+        elif fmt == "md":
+            path.write_text(render_md([], columns or _MESSAGE_COLUMNS), encoding="utf-8")
+        else:
+            path.write_text(render_html([], columns or _MESSAGE_COLUMNS), encoding="utf-8")
+        return {
+            "exported": True,
+            "path": str(path),
+            "empty": True,
+            "files": [str(path)],
+            "rows": 0,
+            "bytes": path.stat().st_size,
+            "note": "无匹配数据，已写入仅含表头的空文件",
+        }
     for i in range(0, len(rows), chunk):
         part = rows[i : i + chunk]
         path = out / _name(prefix, fmt, i // chunk)

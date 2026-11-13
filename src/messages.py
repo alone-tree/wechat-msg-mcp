@@ -29,6 +29,10 @@ _IMG_MD5 = re.compile(r'md5="([0-9a-f]{32})"')
 _XML_MD5 = re.compile(r"<md5>([0-9a-f]{32})</md5>")
 _VOICE_LEN = re.compile(r'voicelength="(\d+)"')
 _VIDEO_LEN = re.compile(r'playlength="(\d+)"')
+_TITLE_RE = re.compile(r"<title>(.*?)</title>", re.S)
+_DES_RE = re.compile(r"<des>(.*?)</des>", re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
 _DEFAULT_WINDOW_DAYS = 30
 
 _TYPE_ALIASES = {
@@ -112,14 +116,34 @@ def _ts_end(date: str) -> Optional[int]:
     return t + 86399 if t is not None else None
 
 
-def _media(
-    src: LocalSource, text: str, type_name: str, subtype: Optional[str], chat_id: str = ""
-) -> Optional[dict]:
+def _distill(text: str) -> str:
+    """把 appmsg/引用类 XML 压成可读摘要，避免整段 XML 占响应体。"""
+    if not text:
+        return ""
+    parts = [p.strip() for p in _TITLE_RE.findall(text) + _DES_RE.findall(text) if p.strip()]
+    if parts:
+        return " / ".join(parts)[:300]
+    plain = _WS_RE.sub(" ", _TAG_RE.sub(" ", text)).strip()
+    return plain[:300]
+
+
+def _media(src: LocalSource, text: str, type_name: str, subtype: Optional[str], chat_id: str = "") -> Optional[dict]:
     if subtype == "file":
         from .media_files import resolve as resolve_file
 
         m = _XML_MD5.search(text or "")
-        return resolve_file(src, m.group(1) if m else "", chat_id) or {"kind": "file"}
+        info = resolve_file(src, m.group(1) if m else "", chat_id)
+        if info:
+            return info
+        title = next((p.strip() for p in _TITLE_RE.findall(text or "") if p.strip()), "")
+        return {
+            "kind": "file",
+            "name": title,
+            "size": 0,
+            "path": "",
+            "exists": False,
+            "note": "本地未落盘或未命中 hardlink",
+        }
     if type_name == "image":
         m = _IMG_MD5.search(text or "")
         return {"kind": "image", "md5": m.group(1) if m else ""}
@@ -194,7 +218,8 @@ def _build_row(db: Path, table: str, r, sender_map: dict, my_user: str, contacts
         "sender_name": "我" if is_me else (contacts.name_of(sid) or ""),
         "chat_id": "",
         "chat_name": "",
-        "text": text if type_name in ("text", "system", "app", "quote") else "",
+        "local_type": int(r["local_type"] or 0),
+        "text": _distill(text) if type_name in ("app", "quote") else (text if type_name in ("text", "system") else ""),
         "media": _media_dummy(type_name, subtype),
         "_db": db.name,
         "_tbl": table,

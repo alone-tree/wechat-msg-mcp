@@ -59,6 +59,8 @@ uv run python -m src.cli index
 
 返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）。文件消息的 media 里带落盘路径，取不到时 exists=false；include_media=true 时图片与表情带 JPEG 路径，语音带 voice_text。
 
+inline 模式下若返回超过 80 KB 或 200 条，会自动落盘并在 auto_export 里给路径、行数与原因，messages 只留前 3 条预览。
+
 ### relations
 
 | kind | subject | 说明 |
@@ -68,11 +70,11 @@ uv run python -m src.cli index
 | person_activity | 人 | 这个人在各群的发言数，targets 可限定群清单 |
 | activity | 群或人 | 单会话精确统计：总数、按天、按小时、按类型、Top 发言人 |
 
-跨群聚合走本地索引，返回体里 basis 标明口径；单会话 activity 是精确扫描。
+跨群聚合走本地索引，返回体里 basis 标明口径；单会话 activity 是精确扫描。四类结果都带 total（真实总数）、returned 与 has_more；目标不存在时返回 error 与 unresolved 候选。
 
 ### search
 
-一次搜实体与消息：scope=all/entity/message，消息带命中片段，实体区分命中字段（备注、昵称、微信号、群名）。
+一次搜实体与消息：scope=all/entity/message，消息带命中片段，实体区分命中字段（备注、昵称、微信号、群名）。消息结果带 total、has_more、next_offset，类型统一为字符串。
 
 ### sync
 

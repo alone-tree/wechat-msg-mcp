@@ -32,10 +32,42 @@ def _resolve(src: LocalSource, subject: str) -> Optional[dict]:
     return hit["candidates"][0]
 
 
+def _resolve_kind(src: LocalSource, subject: str, kind: str | None) -> tuple[Optional[dict], list]:
+    """关系查询只接受精确或包含级命中，且类型要对得上；kind 为空则不限制类型。"""
+    from .entities import resolve_name
+
+    hit = resolve_name(src, subject, limit=5)
+    cands = hit.get("candidates", [])
+    for c in cands:
+        if c.get("matched") in ("exact", "contains") and (kind is None or c.get("kind") == kind):
+            return c, cands
+    return None, cands
+
+
+def _fail(src: LocalSource, subject: str, message: str, kind: str, candidates: list | None = None) -> dict:
+    from .entities import resolve_name
+
+    cands = candidates if candidates is not None else resolve_name(src, subject, limit=5).get("candidates", [])
+    return {
+        "error": message,
+        "kind": kind,
+        "subject": subject,
+        "unresolved": [
+            {
+                "input": subject,
+                "reason": "not_found" if not cands else "ambiguous",
+                "candidates": cands,
+            }
+        ],
+        "total": 0,
+        "data_cutoff": src.data_cutoff(),
+    }
+
+
 def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
-    target = _resolve(src, subject)
+    target, cands = _resolve_kind(src, subject, "group")
     if not target:
-        return {"error": "未找到该群", "subject": subject, "data_cutoff": src.data_cutoff()}
+        return _fail(src, subject, "未找到该群", "group_members", cands)
     gid = target["id"]
     db = src.path("contact")
     conn = connect_ro(db)
@@ -44,14 +76,18 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
             "SELECT id, remark, nick_name, extra_buffer FROM contact WHERE username=?", (gid,)
         ).fetchone()
         if not row:
-            return {"error": "联系人表里没有该群", "subject": subject, "data_cutoff": src.data_cutoff()}
+            return _fail(src, subject, "联系人表里没有该群", "group_members")
         room_id = row["id"]
         owner = ""
         if table_exists(conn, "chat_room"):
             r2 = conn.execute("SELECT owner FROM chat_room WHERE username=?", (gid,)).fetchone()
             owner = (r2["owner"] or "") if r2 else ""
+        total = 0
         members = []
         if table_exists(conn, "chatroom_member"):
+            total = conn.execute(
+                "SELECT COUNT(*) FROM chatroom_member WHERE room_id = ?", (room_id,)
+            ).fetchone()[0]
             for m in conn.execute(
                 "SELECT c.username, c.remark, c.nick_name, c.alias, c.local_type, c.description"
                 " FROM chatroom_member cm JOIN contact c ON c.id = cm.member_id"
@@ -72,7 +108,9 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
         return {
             "kind": "group_members",
             "group": {"id": gid, "name": row["remark"] or row["nick_name"] or gid, "owner_id": owner},
-            "total": len(members),
+            "total": total,
+            "returned": len(members),
+            "has_more": total > len(members),
             "members": members,
             "data_cutoff": src.data_cutoff(),
         }
@@ -81,21 +119,21 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
 
 
 def common_groups(src: LocalSource, subject: str, limit: int = 200) -> dict:
-    target = _resolve(src, subject)
+    target, cands = _resolve_kind(src, subject, "person")
     if not target:
-        return {"error": "未找到该联系人", "subject": subject, "data_cutoff": src.data_cutoff()}
+        return _fail(src, subject, "未找到该联系人", "common_groups", cands)
     person_id = target["id"]
     db = src.path("contact")
     conn = connect_ro(db)
     try:
         prow = conn.execute("SELECT id FROM contact WHERE username=?", (person_id,)).fetchone()
         if not prow:
-            return {"error": "联系人表里没有该人", "subject": subject, "data_cutoff": src.data_cutoff()}
+            return _fail(src, subject, "联系人表里没有该人", "common_groups")
         pid = prow["id"]
         rows = conn.execute(
             "SELECT c.username, c.remark, c.nick_name FROM chatroom_member cm"
-            " JOIN contact c ON c.id = cm.room_id WHERE cm.member_id = ? LIMIT ?",
-            (pid, limit),
+            " JOIN contact c ON c.id = cm.room_id WHERE cm.member_id = ?",
+            (pid,),
         ).fetchall()
         gids = [r["username"] for r in rows]
         counts: dict[str, int] = {}
@@ -126,7 +164,9 @@ def common_groups(src: LocalSource, subject: str, limit: int = 200) -> dict:
             "kind": "common_groups",
             "person": {"id": person_id, "name": target.get("name", "")},
             "total": len(groups),
-            "groups": groups,
+            "returned": len(groups[:limit]),
+            "has_more": len(groups) > limit,
+            "groups": groups[:limit],
             "basis": "文本消息计数，来自本地索引",
             "data_cutoff": src.data_cutoff(),
         }
@@ -140,12 +180,13 @@ def person_activity(
     targets: Optional[list[str]] = None,
     since: str = "",
     until: str = "",
+    limit: int = 200,
 ) -> dict:
     from .messages import _ts, _ts_end
 
-    target = _resolve(src, subject)
+    target, cands = _resolve_kind(src, subject, "person")
     if not target:
-        return {"error": "未找到该联系人", "subject": subject, "data_cutoff": src.data_cutoff()}
+        return _fail(src, subject, "未找到该联系人", "person_activity", cands)
     pid = target["id"]
     lo, hi = _ts(since), _ts_end(until)
     idx = index.count(src)
@@ -187,12 +228,16 @@ def person_activity(
         for c in load_contacts(src)
     }
     groups = [{"id": cid, "name": names.get(cid, cid), "messages": n, "last_at": _fmt(last)} for cid, n, last in rows]
+    page = groups[:limit]
     return {
         "kind": "person_activity",
         "person": {"id": pid, "name": target.get("name", "")},
         "scope": {"targets": chat_filter or "all_groups"},
-        "total": sum(g["messages"] for g in groups),
-        "groups": groups,
+        "total": len(groups),
+        "messages_total": sum(g["messages"] for g in groups),
+        "returned": len(page),
+        "has_more": len(groups) > len(page),
+        "groups": page,
         "basis": "文本消息计数，来自本地索引",
         "data_cutoff": src.data_cutoff(),
     }
@@ -204,9 +249,9 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
     from .messages import _content, _ts, _ts_end, resolve_tables
     from .db.types import classify
 
-    target = _resolve(src, subject)
+    target, cands = _resolve_kind(src, subject, None)
     if not target:
-        return {"error": "未找到该会话", "subject": subject, "data_cutoff": src.data_cutoff()}
+        return _fail(src, subject, "未找到该会话", "activity", cands)
     cid = target["id"]
     tables = resolve_tables(src, cid)
     if not tables:
@@ -263,7 +308,7 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
         "chat": {"id": cid, "name": target.get("name", "")},
         "total": total,
         "by_day": [{"day": d, "count": n} for d, n in days],
-        "by_hour": by_hour,
+        "by_hour": [{"hour": i, "count": n} for i, n in enumerate(by_hour)],
         "by_type": dict(sorted(by_type.items(), key=lambda x: x[1], reverse=True)),
         "top_senders": [{"name": n, "messages": c} for n, c in top],
         "basis": "精确扫描源库",

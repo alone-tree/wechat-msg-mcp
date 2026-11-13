@@ -80,7 +80,13 @@ def cmd_messages(args) -> int:
     )
     for m in obj["messages"]:
         body = m.get("text") or (f"[{m['type']}]" + (f"({m['subtype']})" if m.get("subtype") else ""))
+        if m.get("voice_text"):
+            body = f"[语音转写] {m['voice_text']}"
         print(f"[{m['time']}] {m['chat_name']} | {m['sender_name']}: {body[:120]}")
+    if obj.get("auto_export"):
+        print("提示：返回体较大，已自动落盘：", obj["auto_export"].get("path"), "行数", obj["auto_export"].get("rows"))
+    elif len(json.dumps(obj, ensure_ascii=False)) > 80000:
+        print("提示：本次结果较大，建议加 --output file 落盘")
     if obj.get("unresolved"):
         print("unresolved:", json.dumps(obj["unresolved"], ensure_ascii=False))
     return 0
@@ -126,7 +132,7 @@ def cmd_search(args) -> int:
     if args.json:
         _print(obj, True)
         return 0
-    print(f"counts={obj['counts']}  data_cutoff={obj['data_cutoff']}")
+    print(f"counts={obj['counts']}  total={obj['total']}  has_more={obj['has_more']}  next_offset={obj['next_offset']}  data_cutoff={obj['data_cutoff']}")
     for e in obj["entities"][:20]:
         print(f"[{e['kind']}] {e['name']}  <- {e['matched']}={e['value']}")
     for m in obj["messages"][:20]:

@@ -190,4 +190,8 @@ def _attach_comments(conn: sqlite3.Connection, page: list[dict], names: dict[str
         m["comments"] = comments
         m["comment_count"] = len(comments)
         extra_likes = sum(1 for it in items if it["type"] == 1)
-        m["like_count"] = max(m["like_count"], extra_likes)
+        if extra_likes and not m["likes"]:
+            m["like_count"] = extra_likes
+            m["likes_note"] = "点赞数来自小红点记录，昵称未解析"
+        elif extra_likes > m["like_count"]:
+            m["like_count"] = extra_likes

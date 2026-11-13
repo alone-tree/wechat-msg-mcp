@@ -58,7 +58,8 @@ def load_contacts(src: LocalSource) -> list[dict]:
         if nick_col:
             select.append(nick_col)
         rows = conn.execute(
-            f"SELECT {', '.join(select)} FROM contact WHERE username IS NOT NULL AND username != ''"
+            f"SELECT {', '.join(select)} FROM contact WHERE username IS NOT NULL"
+            " AND username != '' AND username NOT LIKE '@placeholder%'"
         ).fetchall()
         out = []
         for r in rows:
