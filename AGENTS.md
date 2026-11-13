@@ -54,6 +54,7 @@
 | docs/总体设计.md | 当前实现的数据流、模块职责、数据可得性、性能边界 | 是 |
 | docs/任务清单.md | 唯一任务表 T01 至 T15，含优先级、阶段、状态 | 是 |
 | docs/开发日志.md | 按日期的变更、原因、验证与提交号 | 是 |
+| docs/交接.md | 当前进度、已定接口与下一步 | 是 |
 | docs/重构方案-2026-11-13.md | 讨论稿：5 工具重构的设计与阶段验收，未实施 | 是 |
 | docs/业务场景与程序不匹配.md | 业务复盘产出的 M1 至 M10 原始清单 | 是 |
 | private-docs/README.md | 私人资料的规则、命名与索引 | 否 |
@@ -76,30 +77,36 @@ wechat-msg-mcp/
 │   ├── 任务清单.md             T01 至 T15
 │   ├── 开发日志.md             按日期记录
 │   ├── 重构方案-2026-11-13.md  讨论稿，未实施
-│   └── 业务场景与程序不匹配.md 业务复盘原始清单
+│   ├── 业务场景与程序不匹配.md 业务复盘原始清单
+│   └── 交接.md                 当前进度与下一步
 ├── src/
 │   ├── __init__.py
-│   ├── server.py               MCP 入口、工具注册、增量同步
-│   ├── config.py               路径、密钥、解密目录检查
-│   ├── entities.py             实体查询：群、人、会话列表与筛选
+│   ├── server.py               MCP 入口（薄壳，5 个工具）
+│   ├── mcp_tools.py            五个 MCP 工具的参数与 JSON 包装
+│   ├── service.py              service 门面，MCP 与 CLI 共用
+│   ├── config.py               路径、密钥、解密目录、账号 wxid
+│   ├── entities.py             实体查询：群、人、会话与名称候选
+│   ├── messages.py             消息查询：游标、多目标、类型、文件路径
+│   ├── search.py               实体与消息统一搜索
+│   ├── relations.py            群成员、共同群、跨群发言、活跃统计
+│   ├── export.py               导出 json/csv/md/html
+│   ├── media_files.py          文件消息落盘路径
 │   ├── sync.py                 数据源状态与刷新
 │   ├── cli.py                  wechatq 命令（与 MCP 同参）
 │   ├── db/
 │   │   ├── __init__.py
-│   │   ├── open_.py            只读打开（immutable，不写 sidecar）
-│   │   ├── locator.py          数据源定位（本地解密目录，WDA 接口预留）
+│   │   ├── open_.py            只读打开（immutable）
+│   │   ├── locator.py          数据源定位
 │   │   ├── sender.py           发送者解析与显示名
 │   │   ├── types.py            local_type 解包与 49 子类型
-│   │   ├── models.py           数据模型与文本渲染
-│   │   ├── reader.py           旧查询层（阶段 5 删除）
-│   │   ├── image.py            图片三源降级、DAT 与表情解密
-│   │   ├── voice.py            语音转写
-│   │   └── windows_reader.py   HTTP 回退（待删）
-│   └── tools/
-│       ├── __init__.py
-│       ├── contacts.py         联系人与群
-│       ├── messages.py         消息、搜索、媒体内联
-│       └── summary.py          统计
+│   │   ├── image.py            图片与表情解密（媒体内联待接）
+│   │   └── voice.py            语音转写（媒体内联待接）
+│   ├── index/
+│   │   └── __init__.py         FTS5 构建、增量、查询、候选表
+│   └── report/
+│       ├── __init__.py         年度报告入口 run()
+│       ├── annual.py           两遍扫描与六份产物
+│       └── metrics.py          聚合、类型细分、渲染
 ├── scripts/
 │   ├── __init__.py
 │   ├── decrypt_db.py           通用页级解密
@@ -115,6 +122,9 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
+├── tests/                      单元测试（报告模块 24 用例）
+├── reports/                    年度报告产物，已忽略
+├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
 ├── .venv/                      Python 环境，已忽略
 ├── .deja/                      外部工具目录，已忽略
@@ -135,6 +145,7 @@ wechat-msg-mcp/
 | 规模 | 消息约 142 万条，12 个 message 分库，约 3140 张会话分表，联系人约 3.3 万，群 771 个（740 个有成员关系与群主，288 个有公告） |
 | 不可得字段 | 群管理员、群昵称、@提及结构化标记，三项本地不存在 |
 | 一次性事实 | 群主在 chat_room.owner，群公告在 chat_room_info_detail，群成员在 chatroom_member |
+| 索引 | decrypted/_index/search.db，约 135 万条文本、约 400 MB，全量重建约 37 秒 |
 
 常用命令：
 
@@ -147,4 +158,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已开工。阶段 1 已完成：数据源定位、只读打开、发送者与类型解析、实体查询、wechatq CLI，可列出 771 个群并带成员数、群主、最后活跃时间与数据截止时间。原 11 个工具仍可用，15 项待修问题的状态见任务清单。
+重构已完成阶段 1 到 5：五个 MCP 工具（list_entities、get_messages、relations、search、sync）已接入并在 18907 端口端到端调通，旧的 reader/windows_reader/tools 已删除，CLI 与 MCP 同参，年度报告 4.4 秒跑完 2025 年。待办：媒体内联（T16）与少量验证项，见任务清单。
