@@ -21,7 +21,7 @@ uv run python -m src.cli index
 
 ## 二、MCP 工具
 
-五个工具：list_entities、get_messages、relations、search、sync。所有返回都带 data_cutoff（数据截止时间）。
+五个工具：list_entities、get_messages、relations、search、sync，另有 list_moments 与 list_favorites。所有返回都带 data_cutoff（数据截止时间）。
 
 ### list_entities
 
@@ -78,6 +78,14 @@ uv run python -m src.cli index
 
 action=status 返回数据截止时间、库文件 mtime、联系人、群、索引行数；action=sync 调 quick_decrypt 刷新并增量更新索引（需要 WECHAT_FILES_DIR）。
 
+### list_moments
+
+查朋友圈动态。参数：author（人/自己）、keyword、since_date、until_date、limit、offset、with_interactions（默认 true）。返回 moment 含 author_name、time、text、media（url）、likes、comments、comment_count。
+
+### list_favorites
+
+查收藏。参数：type（text/image/voice/video/link/file/chat_record/note）、keyword、tag、since_date、until_date、limit、offset。返回 item 含 type、title、desc、url、source_user、time、tags。
+
 ## 三、CLI（与 MCP 同参）
 
 ```text
@@ -89,6 +97,10 @@ wechatq rel --kind common_groups --subject 某人
 wechatq rel --kind person_activity --subject 某人 --targets 群A 群B
 wechatq rel --kind activity --subject 某群
 wechatq search 合同 --limit 20
+wechatq moments --limit 20
+wechatq moments --author 某人 --since 2026-01-01
+wechatq favorites --type link --limit 10
+wechatq favorites --tag 学习
 wechatq export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format csv
 wechatq index --rebuild
 wechatq report --year 2025 --out reports/2025
@@ -120,6 +132,8 @@ wechatq resolve 旧群名
 ## 六、已知限制
 
 - 群管理员、群昵称、@提及结构化标记，本地库里没有。
+- 朋友圈与收藏只读本地已同步的数据，不会触发微信重新拉取。
+- 好友地区与添加时间是解 protobuf 的尽力而为，部分联系人为空。
 - 不指定 targets 的查询默认限最近 30 天，避免全库扫描。
 - 跨群聚合（common_groups、person_activity）以索引中的文本消息为基数，媒体消息不计入。
 - 图片与语音需显式传 include_media=true 才会内联；本地未落盘的图片只能拿到缩略图或什么都没有。

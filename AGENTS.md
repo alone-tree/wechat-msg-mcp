@@ -16,7 +16,7 @@
 4. 透明优于沉默。截断要说，用 has_more 与 total；数据旧要说，用 data_cutoff；找不到要说，给候选而不是空结果。静默降级是最大的坑。
 5. 导出优于大响应。结果一大就落文件，MCP 只回路径、条数、时间范围。几百上千条塞进响应体，最后一定被宿主截断。
 6. 先文档后代码。规则、设计、任务、历史各归其位，同一规则只写一处。改代码前先把文档改对。
-7. 少即是多。不做当前用不上的功能。朋友圈、收藏、近实时、发消息都在范围外，除非用户明确要。
+7. 少即是多。不做当前用不上的功能。近实时与发消息不在范围；朋友圈与收藏已按只读方式接入，没有新增数据同步流程。
 
 ## 二、红线
 
@@ -52,7 +52,7 @@
 | USAGE-DSH.md | 运行手册：启动、刷新、工具速查、排障、已知限制 | 是 |
 | docs/索引.md | 文档总索引，每个文件的职责与不写什么 | 是 |
 | docs/总体设计.md | 当前实现的数据流、模块职责、数据可得性、性能边界 | 是 |
-| docs/任务清单.md | 唯一任务表 T01 至 T15，含优先级、阶段、状态 | 是 |
+| docs/任务清单.md | 唯一任务表 T01 至 T18，含优先级、阶段、状态 | 是 |
 | docs/开发日志.md | 按日期的变更、原因、验证与提交号 | 是 |
 | docs/交接.md | 当前进度、已定接口与下一步 | 是 |
 | docs/重构方案-2026-11-13.md | 讨论稿：5 工具重构的设计与阶段验收，未实施 | 是 |
@@ -74,20 +74,22 @@ wechat-msg-mcp/
 ├── docs/
 │   ├── 索引.md                 文档总索引
 │   ├── 总体设计.md             现状：数据流、模块、数据可得性
-│   ├── 任务清单.md             T01 至 T15
+│   ├── 任务清单.md             T01 至 T18
 │   ├── 开发日志.md             按日期记录
 │   ├── 重构方案-2026-11-13.md  讨论稿，未实施
 │   ├── 业务场景与程序不匹配.md 业务复盘原始清单
 │   └── 交接.md                 当前进度与下一步
 ├── src/
 │   ├── __init__.py
-│   ├── server.py               MCP 入口（薄壳，5 个工具）
-│   ├── mcp_tools.py            五个 MCP 工具的参数与 JSON 包装
+│   ├── server.py               MCP 入口（薄壳，7 个工具）
+│   ├── mcp_tools.py            七个 MCP 工具的参数与 JSON 包装
 │   ├── service.py              service 门面，MCP 与 CLI 共用
 │   ├── config.py               路径、密钥、解密目录、账号 wxid
 │   ├── entities.py             实体查询：群、人、会话与名称候选
 │   ├── messages.py             消息查询：游标、多目标、类型、文件路径
 │   ├── search.py               实体与消息统一搜索
+│   ├── moments.py              朋友圈：解析、筛选、评论挂载
+│   ├── favorites.py            收藏：解析、类型与标签筛选
 │   ├── relations.py            群成员、共同群、跨群发言、活跃统计
 │   ├── export.py               导出 json/csv/md/html
 │   ├── media_files.py          文件消息落盘路径
@@ -123,7 +125,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（报告模块 24 用例）
+├── tests/                      单元测试（共 32 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -144,6 +146,7 @@ wechat-msg-mcp/
 | 微信数据 | F:\xwechat_files，账户 wxid_ 开头，db_storage 下按模块分目录 |
 | 解密输出 | decrypted/，模块分目录：contact/、message/、session/、sns/、favorite/ 等 |
 | 规模 | 消息约 142 万条，12 个 message 分库，约 3140 张会话分表，联系人约 3.3 万，群 771 个（740 个有成员关系与群主，288 个有公告） |
+| 其他数据面 | 朋友圈 3095 条动态与 1099 条互动；收藏 198 条与 32 个标签；好友地区覆盖 1030/1389 |
 | 不可得字段 | 群管理员、群昵称、@提及结构化标记，三项本地不存在 |
 | 一次性事实 | 群主在 chat_room.owner，群公告在 chat_room_info_detail，群成员在 chatroom_member |
 | 索引 | decrypted/_index/search.db，约 135 万条文本、约 400 MB，全量重建约 37 秒 |
@@ -159,4 +162,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 6：五个 MCP 工具（list_entities、get_messages、relations、search、sync）在 18907 端到端调通；include_media 可把图片、表情、视频封面落盘并转写语音；旧 reader/tools/windows_reader 已删；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年。剩余：T04 多目标验收与 T14 联系人地区，见任务清单。
+重构已完成阶段 1 到 7：七个 MCP 工具（list_entities、get_messages、relations、search、sync、list_moments、list_favorites）全部可用；联系人新增地区与添加时间；旧 reader/tools/windows_reader 已删；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；32 项单测通过。
