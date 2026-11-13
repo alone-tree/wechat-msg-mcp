@@ -8,41 +8,21 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
-from . import entities, sync
-from .db.locator import LocalSource
+from .service import Service
 
 
-def _source(args) -> LocalSource:
-    if args.root:
-        return LocalSource(Path(args.root))
-    from .config import get_decrypted_dir
-
-    return LocalSource(get_decrypted_dir())
-
-
-def _print(obj, as_json: bool, columns: list[str] | None = None) -> None:
-    if as_json:
-        print(json.dumps(obj, ensure_ascii=False, indent=2))
-        return
-    if columns and isinstance(obj.get("entities"), list):
-        print(
-            f"data_cutoff={obj.get('data_cutoff', '')}  total={obj.get('total')}  "
-            f"returned={obj.get('returned')}  has_more={obj.get('has_more')}"
-        )
-        widths = {c: max(len(c), 28 if c in ("id", "name") else 12) for c in columns}
-        print("  ".join(c.ljust(widths[c]) for c in columns))
-        for row in obj["entities"]:
-            print("  ".join(str(row.get(c, "")).ljust(widths[c]) for c in columns))
-        return
+def _print(obj, as_json: bool) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+def _service(args) -> Service:
+    return Service(args.root or None)
+
+
 def cmd_list(args) -> int:
-    src = _source(args)
-    obj = entities.list_entities(
-        src,
+    svc = _service(args)
+    obj = svc.list_entities(
         scope=args.scope,
         keyword=args.keyword,
         since_days=args.since_days,
@@ -54,28 +34,157 @@ def cmd_list(args) -> int:
         limit=args.limit,
         offset=args.offset,
     )
-    _print(obj, args.json, ["id", "kind", "name", "member_count", "owner_name", "last_active_at", "unread"])
+    if args.json:
+        _print(obj, True)
+        return 0
+    print(
+        f"data_cutoff={obj['data_cutoff']}  total={obj['total']}  "
+        f"returned={obj['returned']}  has_more={obj['has_more']}"
+    )
+    cols = ["id", "kind", "name", "member_count", "owner_name", "last_active_at", "unread"]
+    print("  ".join(c.ljust(24) for c in cols))
+    for row in obj["entities"]:
+        print("  ".join(str(row.get(c, "")).ljust(24) for c in cols))
+    return 0
+
+
+def cmd_messages(args) -> int:
+    svc = _service(args)
+    targets = args.targets or None
+    if targets and len(targets) == 1 and "," in targets[0]:
+        targets = [t for t in targets[0].split(",") if t]
+    obj = svc.get_messages(
+        targets=targets,
+        sender=args.sender,
+        start=args.start,
+        end=args.end,
+        types=args.types,
+        keyword=args.keyword,
+        order=args.order,
+        limit=args.limit,
+        cursor=args.cursor,
+    )
+    if args.output == "file":
+        from . import export
+
+        exported = export.write_rows(obj["messages"], fmt=args.format, prefix="messages")
+        obj["export"] = exported
+        obj["messages"] = obj["messages"][:3]
+    if args.json:
+        _print(obj, True)
+        return 0
+    print(
+        f"data_cutoff={obj['data_cutoff']}  total={obj['total']}  returned={obj['returned']}  "
+        f"has_more={obj['has_more']}  next_cursor={obj['next_cursor'] or '-'}"
+    )
+    for m in obj["messages"]:
+        body = m.get("text") or (f"[{m['type']}]" + (f"({m['subtype']})" if m.get("subtype") else ""))
+        print(f"[{m['time']}] {m['chat_name']} | {m['sender_name']}: {body[:120]}")
+    if obj.get("unresolved"):
+        print("unresolved:", json.dumps(obj["unresolved"], ensure_ascii=False))
+    return 0
+
+
+def cmd_rel(args) -> int:
+    svc = _service(args)
+    obj = svc.relations(
+        args.kind,
+        args.subject,
+        targets=args.targets,
+        since=args.since,
+        until=args.until,
+        limit=args.limit,
+    )
+    if args.json:
+        _print(obj, True)
+        return 0
+    if args.kind == "group_members":
+        members = obj.get("members", [])
+        print(f"group={obj.get('group', {}).get('name', '')}  total={obj.get('total')}  data_cutoff={obj.get('data_cutoff')}")
+        for m in members[:50]:
+            print(f"{m['name']} | {m['relation']} | {m['alias']}")
+    elif args.kind == "common_groups":
+        print(f"person={obj.get('person', {}).get('name', '')}  total={obj.get('total')}  basis={obj.get('basis')}")
+        for g in obj.get("groups", [])[:30]:
+            print(f"{g['messages']:>6}  {g['name']}")
+    elif args.kind == "person_activity":
+        print(f"person={obj.get('person', {}).get('name', '')}  total={obj.get('total')}  basis={obj.get('basis')}")
+        for g in obj.get("groups", [])[:30]:
+            print(f"{g['messages']:>6}  {g['name']}  last={g['last_at']}")
+    else:
+        print(f"chat={obj.get('chat', {}).get('name', '')}  total={obj.get('total')}  basis={obj.get('basis')}")
+        print("by_type:", obj.get("by_type"))
+        print("top_senders:", obj.get("top_senders"))
+        print("by_hour:", obj.get("by_hour"))
+    return 0
+
+
+def cmd_search(args) -> int:
+    svc = _service(args)
+    obj = svc.search(args.query, scope=args.scope, since=args.since, until=args.until, limit=args.limit)
+    if args.json:
+        _print(obj, True)
+        return 0
+    print(f"counts={obj['counts']}  data_cutoff={obj['data_cutoff']}")
+    for e in obj["entities"][:20]:
+        print(f"[{e['kind']}] {e['name']}  <- {e['matched']}={e['value']}")
+    for m in obj["messages"][:20]:
+        print(f"[{m['time']}] {m['chat_name']} | {m['sender_name']}: {m['snippet'][:120]}")
     return 0
 
 
 def cmd_resolve(args) -> int:
-    src = _source(args)
-    obj = entities.resolve_name(src, args.name, limit=args.limit)
-    _print(obj, args.json)
+    svc = _service(args)
+    _print(svc.resolve(args.name, limit=args.limit), True)
     return 0
 
 
 def cmd_status(args) -> int:
-    src = _source(args)
-    _print(sync.status(src), args.json)
+    _print(_service(args).status(), True)
     return 0
 
 
 def cmd_sync(args) -> int:
-    src = _source(args)
-    obj = sync.refresh(src)
-    _print(obj, args.json)
+    obj = _service(args).refresh()
+    _print(obj, True)
     return 0 if obj.get("ok") else 1
+
+
+def cmd_index(args) -> int:
+    obj = _service(args).build_index(rebuild=args.rebuild)
+    _print(obj, True)
+    return 0 if obj.get("ok") else 1
+
+
+def cmd_export(args) -> int:
+    """导出：按条件循环翻页，边取边写。"""
+    from . import export
+
+    svc = _service(args)
+    rows: list[dict] = []
+    cursor = ""
+    pages = 0
+    while True:
+        obj = svc.get_messages(
+            targets=args.targets or None,
+            sender=args.sender,
+            start=args.start,
+            end=args.end,
+            types=args.types,
+            keyword=args.keyword,
+            order="asc",
+            limit=1000,
+            cursor=cursor,
+        )
+        rows.extend(obj["messages"])
+        pages += 1
+        if not obj["has_more"] or not obj["next_cursor"] or pages > 500:
+            break
+        cursor = obj["next_cursor"]
+    result = export.write_rows(rows, fmt=args.format, prefix="export", out_dir=args.out)
+    result.update({"total": len(rows), "basis": "asc 顺序导出", "data_cutoff": svc.src.data_cutoff()})
+    _print(result, True)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,16 +208,62 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--offset", type=int, default=0)
     s.set_defaults(func=cmd_list)
 
-    r = sub.add_parser("resolve", parents=[common], help="名称解析，返回候选")
-    r.add_argument("name")
-    r.add_argument("--limit", type=int, default=5)
-    r.set_defaults(func=cmd_resolve)
+    m = sub.add_parser("messages", parents=[common], help="读取消息")
+    m.add_argument("--targets", nargs="*", default=[])
+    m.add_argument("--sender", default="")
+    m.add_argument("--start", default="")
+    m.add_argument("--end", default="")
+    m.add_argument("--types", nargs="*", default=[])
+    m.add_argument("--keyword", default="")
+    m.add_argument("--order", default="desc", choices=["desc", "asc"])
+    m.add_argument("--limit", type=int, default=50)
+    m.add_argument("--cursor", default="")
+    m.add_argument("--output", default="inline", choices=["inline", "file"])
+    m.add_argument("--format", default="csv", choices=["csv", "json", "md", "html"])
+    m.set_defaults(func=cmd_messages)
+
+    r = sub.add_parser("rel", parents=[common], help="关系查询")
+    r.add_argument("--kind", required=True, choices=["group_members", "common_groups", "person_activity", "activity"])
+    r.add_argument("--subject", required=True)
+    r.add_argument("--targets", nargs="*", default=None)
+    r.add_argument("--since", default="")
+    r.add_argument("--until", default="")
+    r.add_argument("--limit", type=int, default=500)
+    r.set_defaults(func=cmd_rel)
+
+    q = sub.add_parser("search", parents=[common], help="搜索实体与消息")
+    q.add_argument("query")
+    q.add_argument("--scope", default="all", choices=["message", "entity", "all"])
+    q.add_argument("--since", default="")
+    q.add_argument("--until", default="")
+    q.add_argument("--limit", type=int, default=30)
+    q.set_defaults(func=cmd_search)
+
+    e = sub.add_parser("export", parents=[common], help="导出到文件")
+    e.add_argument("--targets", nargs="*", default=[])
+    e.add_argument("--sender", default="")
+    e.add_argument("--start", default="")
+    e.add_argument("--end", default="")
+    e.add_argument("--types", nargs="*", default=[])
+    e.add_argument("--keyword", default="")
+    e.add_argument("--format", default="csv", choices=["csv", "json", "md", "html"])
+    e.add_argument("--out", default="")
+    e.set_defaults(func=cmd_export)
+
+    rs = sub.add_parser("resolve", parents=[common], help="名称解析，返回候选")
+    rs.add_argument("name")
+    rs.add_argument("--limit", type=int, default=5)
+    rs.set_defaults(func=cmd_resolve)
 
     st = sub.add_parser("status", parents=[common], help="数据源状态")
     st.set_defaults(func=cmd_status)
 
-    sy = sub.add_parser("sync", parents=[common], help="刷新解密数据")
+    sy = sub.add_parser("sync", parents=[common], help="刷新解密数据并更新索引")
     sy.set_defaults(func=cmd_sync)
+
+    ix = sub.add_parser("index", parents=[common], help="构建或更新全文索引")
+    ix.add_argument("--rebuild", action="store_true")
+    ix.set_defaults(func=cmd_index)
     return p
 
 

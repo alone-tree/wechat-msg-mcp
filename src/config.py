@@ -128,3 +128,31 @@ def check_decrypted_dir(decrypted_dir: Optional[Path] = None) -> tuple[bool, str
             return False, f"消息数据库目录为空: {msg_dir}"
 
     return True, f"解密目录就绪: {d}"
+
+
+def get_account_wxid() -> str:
+    """推断本机登录账号的 wxid，用于判群消息是不是自己发的。
+
+    优先级：WECHAT_MY_WXID 环境变量 > WECHAT_FILES_DIR 下的账号目录名。
+    目录名形如 wxid_xxxx_suffix，wxid 部分是 wxid_ 加字母数字。
+    """
+    import re
+
+    env_wxid = os.environ.get("WECHAT_MY_WXID")
+    if env_wxid:
+        return env_wxid.strip()
+    files_dir = os.environ.get("WECHAT_FILES_DIR")
+    if not files_dir:
+        return ""
+    base = Path(files_dir).expanduser()
+    if not base.exists():
+        return ""
+    for d in base.iterdir():
+        if not d.is_dir():
+            continue
+        m = re.match(r"(wxid_[a-z0-9]+)_[0-9a-f]+$", d.name)
+        if m:
+            return m.group(1)
+        if d.name.startswith("wxid_"):
+            return d.name
+    return ""
