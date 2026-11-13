@@ -234,6 +234,7 @@ def list_messages(
     limit: int = 200,
     cursor: str = "",
     per_target_limit: int = 50,
+    include_media: bool = False,
 ) -> dict:
     from . import index
     from .entities import load_contacts, resolve_name
@@ -291,6 +292,7 @@ def list_messages(
     matched = 0
     heaps: dict[str, list] = {}
     db_cache: dict[str, tuple[dict, dict]] = {}
+    media_budget = {"image": 8, "voice": 8}
 
     for cid, cname, db, tbl in jobs:
         conn = connect_ro(db)
@@ -377,6 +379,10 @@ def list_messages(
             row["media"] = _media(
                 src, row.get("_raw", ""), row["type"], row["subtype"], row["chat_id"]
             )
+        if include_media and row.get("media"):
+            from . import media_inline
+
+            media_inline.enrich(src, row, row.get("_raw", ""), media_budget)
         row.pop("_raw", None)
         row.pop("_db", None)
         row.pop("_tbl", None)

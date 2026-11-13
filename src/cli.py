@@ -63,6 +63,7 @@ def cmd_messages(args) -> int:
         order=args.order,
         limit=args.limit,
         cursor=args.cursor,
+        include_media=args.include_media,
     )
     if args.output == "file":
         from . import export
@@ -229,6 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--limit", type=int, default=50)
     m.add_argument("--cursor", default="")
     m.add_argument("--output", default="inline", choices=["inline", "file"])
+    m.add_argument("--include-media", action="store_true", help="内联图片路径与语音转写")
     m.add_argument("--format", default="csv", choices=["csv", "json", "md", "html"])
     m.set_defaults(func=cmd_messages)
 

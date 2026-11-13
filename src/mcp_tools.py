@@ -69,6 +69,7 @@ def register(mcp, get_service) -> None:
         cursor: str = "",
         output: str = "inline",
         format: str = "csv",
+        include_media: bool = False,
     ) -> str:
         """读取聊天消息，默认返回最新的一批。
 
@@ -96,6 +97,7 @@ def register(mcp, get_service) -> None:
             order=order,
             limit=limit,
             cursor=cursor,
+            include_media=include_media,
         )
         if output == "file":
             from . import export
