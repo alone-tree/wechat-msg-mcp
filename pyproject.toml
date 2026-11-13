@@ -25,6 +25,7 @@ windows = [
 
 [project.scripts]
 wechat-mcp = "src.server:main"
+wechatq = "src.cli:main"
 
 [build-system]
 requires = ["hatchling"]
