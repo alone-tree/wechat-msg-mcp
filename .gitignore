@@ -25,3 +25,6 @@ __pycache__/
 .tmp_*
 verify_mcp.py
 verify_query.py
+
+# 私人文档（本地存放，永不提交，见 private-docs/README.md）
+/private-docs/
