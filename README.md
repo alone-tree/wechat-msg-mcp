@@ -60,20 +60,7 @@ MCP 协议要求地址为 localhost 或 127.0.0.1，不能填局域网 IP。
 
 ## 项目结构
 
-```text
-src/
-  server.py          MCP 服务入口与工具注册
-  config.py          路径与密钥
-  db/reader.py       SQLite 查询
-  db/models.py       数据模型与文本渲染
-  db/image.py        图片与表情解密
-  db/voice.py        语音转写
-  db/windows_reader.py  HTTP 回退（计划删除）
-  tools/             工具实现
-scripts/             密钥提取与解密
-docs/                设计与任务文档
-start.ps1            启动脚本
-```
+完整文件树、每个文件的职责与入库状态见 AGENTS.md 的「文件树」一节；文档各自的职责见 docs/索引.md。
 
 ## 文档
 
