@@ -128,7 +128,9 @@ def cmd_rel(args) -> int:
 
 def cmd_search(args) -> int:
     svc = _service(args)
-    obj = svc.search(args.query, scope=args.scope, since=args.since, until=args.until, limit=args.limit)
+    obj = svc.search(
+        args.query, scope=args.scope, since=args.since, until=args.until, limit=args.limit, offset=args.offset
+    )
     if args.json:
         _print(obj, True)
         return 0
@@ -295,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--since", default="")
     q.add_argument("--until", default="")
     q.add_argument("--limit", type=int, default=30)
+    q.add_argument("--offset", type=int, default=0)
     q.set_defaults(func=cmd_search)
 
     e = sub.add_parser("export", parents=[common], help="导出到文件")

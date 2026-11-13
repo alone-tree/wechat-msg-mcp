@@ -156,6 +156,7 @@ def register(mcp, get_service) -> None:
         since_date: str = "",
         until_date: str = "",
         limit: int = 30,
+        offset: int = 0,
     ) -> str:
         """一次查询同时搜索实体与消息。
 
@@ -165,10 +166,11 @@ def register(mcp, get_service) -> None:
             since_date: 消息时间下界 YYYY-MM-DD
             until_date: 消息时间上界 YYYY-MM-DD
             limit: 每组结果上限
+            offset: 消息结果偏移，配合 next_offset 翻页
         """
         return _dumps(
             get_service().search(
-                query, scope=scope, since=since_date, until=until_date, limit=limit
+                query, scope=scope, since=since_date, until=until_date, limit=limit, offset=offset
             )
         )
 

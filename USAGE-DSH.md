@@ -74,7 +74,7 @@ inline 模式下若返回超过 80 KB 或 200 条，会自动落盘并在 auto_e
 
 ### search
 
-一次搜实体与消息：scope=all/entity/message，消息带命中片段，实体区分命中字段（备注、昵称、微信号、群名）。消息结果带 total、has_more、next_offset，类型统一为字符串。
+一次搜实体与消息：scope=all/entity/message，消息带命中片段，实体区分命中字段（备注、昵称、微信号、群名）。消息结果带 total、has_more、next_offset，类型统一为字符串；用 offset 配合 next_offset 翻页。
 
 ### sync
 
