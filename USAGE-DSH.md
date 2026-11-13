@@ -55,8 +55,9 @@ uv run python -m src.cli index
 | cursor | 上一页的 next_cursor |
 | output | inline（默认）或 file |
 | format | output=file 时的 csv/json/md/html |
+| include_media | true 时图片/表情/视频封面落盘为 JPEG 并返回路径，语音转写为文字；本次最多 8 条图片与 8 条语音 |
 
-返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）。文件消息的 media 里带落盘路径，取不到时 exists=false。
+返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）。文件消息的 media 里带落盘路径，取不到时 exists=false；include_media=true 时图片与表情带 JPEG 路径，语音带 voice_text。
 
 ### relations
 
@@ -121,6 +122,6 @@ wechatq resolve 旧群名
 - 群管理员、群昵称、@提及结构化标记，本地库里没有。
 - 不指定 targets 的查询默认限最近 30 天，避免全库扫描。
 - 跨群聚合（common_groups、person_activity）以索引中的文本消息为基数，媒体消息不计入。
-- 图片与语音暂不在消息结果里内联（见 docs/任务清单.md 的 T16）。
+- 图片与语音需显式传 include_media=true 才会内联；本地未落盘的图片只能拿到缩略图或什么都没有。
 - 只解密有 keys.json 密钥的账号。
 - 聊天正文、wxid、群名不写入日志；真实名称只放 private-docs/。

@@ -91,6 +91,7 @@ wechat-msg-mcp/
 │   ├── relations.py            群成员、共同群、跨群发言、活跃统计
 │   ├── export.py               导出 json/csv/md/html
 │   ├── media_files.py          文件消息落盘路径
+│   ├── media_inline.py         图片落盘、表情首帧、语音转写
 │   ├── sync.py                 数据源状态与刷新
 │   ├── cli.py                  wechatq 命令（与 MCP 同参）
 │   ├── db/
@@ -99,8 +100,8 @@ wechat-msg-mcp/
 │   │   ├── locator.py          数据源定位
 │   │   ├── sender.py           发送者解析与显示名
 │   │   ├── types.py            local_type 解包与 49 子类型
-│   │   ├── image.py            图片与表情解密（媒体内联待接）
-│   │   └── voice.py            语音转写（媒体内联待接）
+│   │   ├── image.py            图片与表情解密（供媒体内联）
+│   │   └── voice.py            语音转写（供媒体内联）
 │   ├── index/
 │   │   └── __init__.py         FTS5 构建、增量、查询、候选表
 │   └── report/
@@ -158,4 +159,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 5：五个 MCP 工具（list_entities、get_messages、relations、search、sync）已接入并在 18907 端口端到端调通，旧的 reader/windows_reader/tools 已删除，CLI 与 MCP 同参，年度报告 4.4 秒跑完 2025 年。待办：媒体内联（T16）与少量验证项，见任务清单。
+重构已完成阶段 1 到 6：五个 MCP 工具（list_entities、get_messages、relations、search、sync）在 18907 端到端调通；include_media 可把图片、表情、视频封面落盘并转写语音；旧 reader/tools/windows_reader 已删；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年。剩余：T04 多目标验收与 T14 联系人地区，见任务清单。
