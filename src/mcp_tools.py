@@ -159,9 +159,13 @@ def _save_images(obj: dict, images: list, src, target=None) -> int:
     return saved
 
 
-def _tiles_for(data: bytes, tile_height: int = 1600, max_tiles: int = 10) -> list:
+def _tiles_for(
+    data: bytes, tile_height: int = 1600, max_tiles: int = 10, overlap: int = 80
+) -> list:
     """超长截图切成竖条，否则客户端把整图缩到 1600 高后文字完全看不清。
 
+    相邻两段重叠 overlap 像素：切缝正好落在一行字上时，上下两段各能看到完整的这一行，
+    代价是每段边界重复一行，读的时候跳过即可。
     只在长宽比超过 3 且高度超过一个 tile 时切；普通图片返回空列表。
     """
     import io
@@ -176,18 +180,27 @@ def _tiles_for(data: bytes, tile_height: int = 1600, max_tiles: int = 10) -> lis
             w, h = im.size
             if w <= 0 or h <= tile_height or h < 3 * w:
                 return []
-            n = min(max_tiles, -(-h // tile_height))
-            step = -(-h // n)
+            overlap = max(0, min(overlap, tile_height // 4))
+            step = tile_height - overlap
+            n = -(-(h - overlap) // step)
+            if n > max_tiles:
+                # 段数超上限时拉大跨步，宁可每段更长也不丢内容
+                step = -(-(h - tile_height) // max(1, max_tiles - 1))
+                n = -(-(h - tile_height) // step) + 1 if h > tile_height else 1
+                n = min(max_tiles, n)
             out = []
-            for i in range(n):
-                top = i * step
-                bottom = min(h, top + step)
+            top = 0
+            while top < h and len(out) < max_tiles:
+                bottom = min(h, top + tile_height)
                 if bottom - top < 40:
                     break
                 tile = im.crop((0, top, w, bottom))
                 buf = io.BytesIO()
                 tile.convert("RGB").save(buf, format="JPEG", quality=85)
                 out.append(buf.getvalue())
+                if bottom >= h:
+                    break
+                top += step
     except Exception:
         return []
     return out if len(out) > 1 else []
@@ -225,7 +238,8 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
                     m["media"]["tiles"] = len(tiles)
                     m["media"]["path"] = info["path"]
                     m["media"]["note"] = (
-                        f"长截图已切成 {len(tiles)} 段按顺序返回，整图另存 media.path 便于核对"
+                        f"长截图已切成 {len(tiles)} 段按顺序返回，相邻两段有约 80 像素重叠，"
+                        "重复的一两行属正常；整图另存 media.path 便于核对"
                     )
         else:
             overflow.append(img)

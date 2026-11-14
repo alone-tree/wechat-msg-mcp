@@ -133,7 +133,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 62 项）
+├── tests/                      单元测试（共 66 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -166,7 +166,7 @@ wechat-msg-mcp/
 | 不可得字段 | 群管理员、群昵称、@提及结构化标记，三项本地不存在 |
 | 一次性事实 | 群主在 chat_room.owner，群公告在 chat_room_info_detail，群成员在 chatroom_member |
 | 媒体文件定位 | 先查 message_resource.db 的 MessageResourceInfo.packed_info（消息到落盘基名），再查 hardlink 登记表，最后按消息自带长度与宽高认文件；三者都不中才算没有 |
-| 长截图 | 长宽比超过 3 的截图保底宽 600，返回时按 1600 高切段，避免客户端压成几十像素宽后读不出字 |
+| 长截图 | 长宽比超过 3 的截图保底宽 600，返回时按 1600 高切段、相邻段留 80 像素重叠，避免客户端压成几十像素宽后读不出字，也避免切缝切断一行字 |
 | 索引 | decrypted/_index/search.db，约 135 万条文本、约 400 MB，全量重建 37 到 50 秒 |
 
 常用命令：
@@ -181,4 +181,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；62 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。
+重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；66 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。

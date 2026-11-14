@@ -76,7 +76,7 @@ start 与 get_messages 返回里都有 self 字段：id 是账号 wxid，nicknam
 
 图片定位有三条路，命中任一条都算读到：message_resource 的落盘基名、hardlink 登记表、按消息自带的长度与宽高认文件。所以「登记表里没有」不等于「读不到」。
 
-只有缩略图时会标 media.source=thumb 并在 media.note 说明。长截图（长宽比超过 3）会切成多段返回，media.tiles 是段数，整图在 media.path；遇到长截图就按顺序看这几段。
+只有缩略图时会标 media.source=thumb 并在 media.note 说明。长截图（长宽比超过 3）会切成多段返回，media.tiles 是段数，相邻两段重叠约 80 像素，边界处重复的一两行属正常，不要当成两条内容；整图在 media.path。
 
 顶层 media_missing 给出各原因的条数，用来判断是「没下载」还是「副本落后」，不要猜。
 
