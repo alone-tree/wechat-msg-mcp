@@ -85,7 +85,7 @@ wechat-msg-mcp/
 ├── src/
 │   ├── __init__.py
 │   ├── server.py               MCP 入口（薄壳，7 个工具）
-│   ├── guide.py               使用说明书（instructions 与 system 工具共用）
+│   ├── guide.py               短 instructions + 完整说明书（后者由 system 返回）
 │   ├── mcp_tools.py            七个 MCP 工具的参数与 JSON 包装
 │   ├── service.py              service 门面，MCP 与 CLI 共用
 │   ├── config.py               路径、密钥、解密目录、账号 wxid、微信目录探测

@@ -1,7 +1,17 @@
-"""使用说明书：MCP instructions 与 start 工具共用同一份文字。
+"""使用说明书：MCP instructions 只放短引导，完整说明由 system(action=start) 返回。
 
-平台无关：不依赖 DSH 的 mcp_load，任何 MCP 客户端调 start 工具都能拿到。
-改说明时只改这里，两处同时生效。
+平台无关：不依赖 DSH 的 mcp_load，任何 MCP 客户端调 system 工具都能拿到全文。
+改说明只改本文件，两处同时生效。
+"""
+
+INSTRUCTIONS = """微信聊天记录只读查询（本机数据，不联网）。
+
+开始前先调 system(action="start")，它返回完整使用说明与当前数据状态。
+
+六个查询工具：list_entities 列会话与联系人，get_messages 读消息，relations 查关系，
+search 搜索，list_moments 朋友圈，list_favorites 收藏。
+
+查询前会自动按 TTL（默认 60 秒）增量刷新，不需要预热脚本；要立刻拿最新数据调 system(action="sync")。
 """
 
 GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个工具，其中 system 是入口。

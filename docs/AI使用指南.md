@@ -2,7 +2,7 @@
 
 给接手的 AI 看的说明书：这个工具能干什么、怎么用、复杂需求怎么编排。
 
-简短版已在 MCP 的 instructions 里每次连接自动下发；也可以调 system(action=start)，它返回同一份说明加当前数据状态。本文件是完整版，含代码示例与任务配方。
+MCP instructions 只放一句引导（245 字），告诉 AI 先调 system(action=start)；完整说明书由这个工具返回（2640 字）。本文件是更细的版本，含代码示例与任务配方。
 
 system 工具是平台无关的入口：不依赖 DSH 的 mcp_load，任何 MCP 客户端调它都能拿到用法。换平台时先调 system(action=start)。
 

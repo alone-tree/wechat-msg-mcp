@@ -31,11 +31,11 @@ def _parse_args():
 
 _args = _parse_args()
 
-from .guide import GUIDE
+from .guide import INSTRUCTIONS
 
 mcp = FastMCP(
     name="wechat-msg-mcp",
-    instructions=GUIDE,
+    instructions=INSTRUCTIONS,
     host=_args.host,
     port=_args.port,
 )
