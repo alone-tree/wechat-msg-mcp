@@ -209,52 +209,72 @@ def _account_dirs() -> list[Path]:
     return out
 
 
-def image_locate(content: str) -> tuple[list[Path], str]:
+def image_locate(
+    content: str, chat_id: str = "", local_id: int = 0, create_time: int = 0
+) -> tuple[list[Path], str]:
     """消息XML -> (本地 .dat 候选路径, 找不到的原因)。
 
-    原因取值：no_md5 / no_hardlink_db / hardlink_unreadable / hardlink_row_missing
-    / dir_map_missing / file_not_on_disk。成功时原因为空串。
+    两条来源互相补充：微信 4.x 的新文件只写 message_resource，老文件只写 hardlink，
+    任何一条给出原图都要用上。候选按原图、高清、缩略图的顺序返回。
+    原因取值：no_md5 / hardlink_row_missing / dir_map_missing / file_not_on_disk，成功为空串。
     """
     if not content:
         return [], "no_content"
     m = _IMG_MD5_RE.search(content) or _IMG_ATTR_MD5_RE.search(content)
     if not m:
         return [], "no_md5"
+
+    from . import resource as resource_mod
+
+    found: list[Path] = list(resource_mod.media_paths(chat_id, local_id, create_time, "img"))
+    reason = ""
+
     conn = _hardlink_conn()
-    if conn is None:
-        return [], "no_hardlink_db"
-    try:
-        row = conn.execute(
-            "SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE md5=? LIMIT 1",
-            (m.group(1),),
-        ).fetchone()
-        if not row:
-            return [], "hardlink_row_missing"
-        dmap = _dir_map(conn)
-    except Exception:
-        return [], "hardlink_unreadable"
-    finally:
-        conn.close()
-    file_name, dir1, dir2 = row
-    d1, d2 = dmap.get(dir1), dmap.get(dir2)
-    if not d1 or not d2:
-        return [], "dir_map_missing"
-    base = file_name[:-4] if file_name.endswith(".dat") else file_name
-    # 数据库里的 file_name 可能自带变体后缀（_h / _t），去掉以免拼出 _h_h.dat 这种空名
-    for vsuf in ("_h", "_t"):
-        if base.endswith(vsuf):
-            base = base[: -len(vsuf)]
-            break
-    out = []
-    for attach in _account_dirs():
-        img_dir = attach / d1 / d2 / "Img"
-        for suffix in ("", "_h", "_t"):
-            p = img_dir / f"{base}{suffix}.dat"
-            if p.exists():
-                out.append(p)
-        if out:
-            break
-    return out, ("" if out else "file_not_on_disk")
+    row = None
+    dmap: dict = {}
+    if conn is not None:
+        try:
+            row = conn.execute(
+                "SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE md5=? LIMIT 1",
+                (m.group(1),),
+            ).fetchone()
+            dmap = _dir_map(conn) if row else {}
+        except Exception:
+            row = None
+        finally:
+            conn.close()
+    if row:
+        file_name, dir1, dir2 = row
+        d1, d2 = dmap.get(dir1), dmap.get(dir2)
+        base = file_name[:-4] if file_name.endswith(".dat") else file_name
+        # 登记名可能自带变体后缀（_h / _t），去掉以免拼出 _h_h.dat 这种空名
+        for vsuf in ("_h", "_t"):
+            if base.endswith(vsuf):
+                base = base[: -len(vsuf)]
+                break
+        if not d1 or not d2:
+            reason = "dir_map_missing"
+        else:
+            for attach in _account_dirs():
+                img_dir = attach / d1 / d2 / "Img"
+                got = False
+                for suffix in ("", "_h", "_t"):
+                    p = img_dir / f"{base}{suffix}.dat"
+                    if p.exists():
+                        if p not in found:
+                            found.append(p)
+                        got = True
+                if got:
+                    break
+            if not got:
+                reason = "file_not_on_disk"
+    elif not found:
+        reason = "hardlink_row_missing"
+
+    if not found:
+        return [], reason or "file_not_on_disk"
+    found.sort(key=lambda p: (p.stem.endswith("_t"), str(p)))
+    return found, ""
 
 
 def find_image_dat_bases(content: str) -> list[Path]:
@@ -525,7 +545,7 @@ def _decode_dat(dat: Path, aes_key: str, xor_key) -> Optional[bytes]:
 
 
 def extract_image_meta(
-    content: str, chat_username: str = "", create_time: int = 0
+    content: str, chat_username: str = "", create_time: int = 0, local_id: int = 0
 ) -> tuple[Optional[bytes], str, str]:
     """消息内容 -> (标准化 JPEG 字节, 来源标记, 失败原因)。
 
@@ -542,7 +562,7 @@ def extract_image_meta(
         except (TypeError, ValueError):
             xor_key = None
 
-    variants, reason = image_locate(content)
+    variants, reason = image_locate(content, chat_username, local_id, create_time)
     if aes_key:
         for dat in variants:
             if dat.stem.endswith("_t"):
@@ -586,17 +606,19 @@ def extract_image_meta(
 
 
 def extract_image_bytes(
-    content: str, chat_username: str = "", create_time: int = 0
+    content: str, chat_username: str = "", create_time: int = 0, local_id: int = 0
 ) -> Optional[bytes]:
     """兼容接口：只要图片字节。"""
-    return extract_image_meta(content, chat_username, create_time)[0]
+    return extract_image_meta(content, chat_username, create_time, local_id)[0]
 
 
 _VIDEO_MD5_RE = re.compile(r'<videomsg[^>]*\bmd5="([0-9a-f]{32})"')
 _VIDEO_DIRS = "video"
 
 
-def extract_video_cover(content: str, create_time: int = 0) -> Optional[bytes]:
+def extract_video_cover(
+    content: str, create_time: int = 0, chat_id: str = "", local_id: int = 0
+) -> Optional[bytes]:
     """视频消息（type 43）-> 封面 JPEG 字节。
 
     本地封面是明文：msg/video/<年月>/<文件基名>.jpg（另有 _thumb.jpg 更小）。
@@ -605,6 +627,15 @@ def extract_video_cover(content: str, create_time: int = 0) -> Optional[bytes]:
     """
     if not content:
         return None
+    from . import resource as resource_mod
+
+    for p in resource_mod.media_paths(chat_id, local_id, create_time, "video"):
+        try:
+            jpeg = normalize_to_jpeg(p.read_bytes())
+        except OSError:
+            jpeg = None
+        if jpeg:
+            return jpeg
     m = _VIDEO_MD5_RE.search(content)
     if not m:
         return _video_cover_by_meta(content, create_time)

@@ -51,7 +51,7 @@ start 与 get_messages 返回里都有 self 字段：id 是账号 wxid，nicknam
 | 文字 | 全文 | 无 |
 | 图片 | 图片内容本身 | AI 直接看图，不需要二次调用 |
 | 表情 | 首帧图 | 同上 |
-| 视频 | 封面图加时长 | media.kind=video |
+| 视频 | 封面图加时长 | media.source=cover，取不到时 missing_reason=cover_missing |
 | 语音 | 转写文字（voice_text） | 不内联音频 |
 | 链接 | media.url 加标题描述 | url 可直接浏览器打开 |
 | 转账 | media.amount 金额 | 取自消息里的金额字段 |
@@ -66,13 +66,17 @@ start 与 get_messages 返回里都有 self 字段：id 是账号 wxid，nicknam
 
 | missing_reason | 下一步 |
 |---|---|
-| hardlink_row_missing | 先 system(action="sync", force=true)，再重查；通常是副本比微信落后 |
-| file_not_on_disk | 微信按需下载，这张图在本机还没落地，客户端里点开过之后才有 |
+| no_local_image | 原图和缩略图都不在本机：这张图从没在微信里打开过，让用户在客户端点开再看 |
+| no_local_file | 文件消息没落盘，同上 |
 | no_image_key | 缺图片密钥文件，找维护者跑脚本，不是数据问题 |
-| decode_failed / no_md5 | 数据异常，记下 local_id 反馈 |
+| decode_failed | 文件在但解不出图，记下 local_id 反馈 |
 | voice_model_missing | 语音模型没装，装了才有转写 |
 | too_many_rows | 条数超过 50 自动跳过，缩小 limit 或加 types 过滤 |
 | not_requested | 这次的调用自己关了 include_media |
+
+图片定位有三条路，命中任一条都算读到：message_resource 的落盘基名、hardlink 登记表、按消息自带的长度与宽高认文件。所以「登记表里没有」不等于「读不到」。
+
+只有缩略图时会标 media.source=thumb 并在 media.note 说明。长截图（长宽比超过 3）会切成多段返回，media.tiles 是段数，整图在 media.path；遇到长截图就按顺序看这几段。
 
 顶层 media_missing 给出各原因的条数，用来判断是「没下载」还是「副本落后」，不要猜。
 
@@ -197,7 +201,8 @@ for gid in groups:
 | 群管理员标不出来 | 本地没有这个字段，不是没解析 |
 | search 搜不到朋友圈和收藏 | 它们不进全库索引，要用各自的关键词参数 |
 | 语音没有转写文字 | 语音模型没装，结果里 warnings 会说明模型该放哪 |
-| 图片只有 kind 没有内容 | 看 media.missing_reason：file_not_on_disk 是在微信里没打开过；hardlink_row_missing 先 sync 再查 |
+| 图片只有 kind 没有内容 | 看 media.missing_reason：no_local_image 是在微信里从没打开过，本机没有原件也没有缩略图 |
+| 图片是 thumb 有点糊 | 原图没落盘，只有微信的缩略图；需要清晰版就在客户端点开一次 |
 | refresh.failed_detail 出现 locked | 有进程占着旧副本，数据已写到 <名>.new，查询照常最新，无需处理 |
 | 少数文件 exists=false | 微信没下载或已清理，只剩文件名和大小 |
 

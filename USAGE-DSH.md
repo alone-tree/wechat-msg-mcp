@@ -114,7 +114,7 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP syst
 
 文件类消息（PDF、表格、压缩包等）不需要参数：读取时自动复制到本进程 exports/run-*/files/，media.path 给副本路径，source_path 保留微信原路径；单文件限 100MB，单次最多 20 个，超过上限的在 media.note 里说明。
 
-语音只有 include_media=true 才给转写文字（默认只有 kind）；需要音频原件时传 extract_media 加 include_media，自动从 SILK 转成 16kHz WAV（可直接播放，体积约为 SILK 的 28 倍，因为 WAV 是不压缩的原始采样），转码失败才回退存 .silk。视频目前只能拿 kind；封面内联与 mp4 原件导出尚未打通（extract_media 对视频无效）。
+需要音频原件时传 extract_media 加 include_media，自动从 SILK 转成 16kHz WAV（可直接播放，体积约为 SILK 的 28 倍，因为 WAV 是不压缩的原始采样），转码失败才回退存 .silk。视频封面同样三级兜底可取（media.source=cover），mp4 原件导出尚未打通（extract_media 对视频无效）。
 
 语音识别模型未安装时不再静默：结果里会出现 warnings 提示与 voice_model_missing 计数，告知模型应放到 decrypted/models/sensevoice/。
 
@@ -148,14 +148,17 @@ include_media 的媒体约定：
 
 | missing_reason | 含义 | 怎么办 |
 |---|---|---|
-| hardlink_row_missing | 本地登记库里没有这个 md5，通常是副本落后或微信还没写登记 | system(action="sync", force=true) 后重查 |
-| file_not_on_disk | 登记了，但 .dat 不在本地（微信按需下载，没点开过就临时不存在） | 在微信里点开该图再看 |
+| no_local_image | 原图与缩略图都找不到：这张图从未在微信里打开过，本机一个字节都没有 | 在微信客户端点开这张图，再查一次 |
+| no_local_file | 文件消息没有落到本地 | 让对方重发或在微信里点开下载 |
 | no_image_key | 缺 decrypted/media_keys.json | 管理员跑 scripts\extract_image_key.py |
 | decode_failed | 文件在但解不出图（格式变体） | 记录消息后反馈 |
-| no_md5 | 消息里没有图片 md5 | 这类是异常数据 |
 | voice_model_missing | 语音识别模型没装 | 模型放到 decrypted/models/sensevoice/ |
 | no_audio | 语音库里没有这条音频 | 微信侧未落盘 |
 | not_requested / too_many_rows | 显式关了媒体提取，或条数超过 50 条自动跳过 | 传 include_media=true 并缩小范围 |
+
+图片定位是三级兜底，命中任何一级都能读到：先按 message_resource.db 里记的落盘基名找，再查 hardlink 登记表，最后拿消息 XML 自带的长度与宽高在磁盘上认文件。所以登记表没有记录的新图片同样能读。
+
+只有缩略图时会给 media.source=thumb 并在 media.note 里说明「原图未落盘，返回的是缩略图」。长宽比超过 3 的长截图会按 1600 高切成多段返回（media.tiles 是段数），整图另存 media.path，避免客户端把整图压成几十像素宽后一个字段都看不清。
 
 顶层的 media_missing 给出各类原因的张数，一次就能判断是「没下载」还是「副本落后」。
 
@@ -273,6 +276,6 @@ wechatq resolve 旧群名
 - 好友地区与添加时间是解 protobuf 的尽力而为，部分联系人为空。
 - 不指定 targets 的查询默认限最近 30 天，避免全库扫描。
 - 跨群聚合（common_groups、person_activity）以索引中的文本消息为基数，媒体消息不计入。
-- 图片与语音默认就会内联（include_media 默认 true，超过 50 条自动跳过）；本地未落盘的图片只有缩略图或什么也没有，原因写在 media.missing_reason。
+- 图片与语音默认就会内联（include_media 默认 true，超过 50 条自动跳过）。从没在微信里打开过的图片，本机只有缩略图甚至什么都没有：有缩略图时会给图并在 media.note 说明，什么都没有时 missing_reason=no_local_image。
 - 只解密有 keys.json 密钥的账号。
 - 聊天正文、wxid、群名不写入日志；真实名称只放 private-docs/。

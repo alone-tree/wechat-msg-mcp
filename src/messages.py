@@ -162,6 +162,7 @@ def _media(src: LocalSource, text: str, type_name: str, subtype: Optional[str], 
             "size": 0,
             "path": "",
             "exists": False,
+            "missing_reason": "no_local_file",
             "note": "本地未落盘或未命中 hardlink",
         }
     if subtype == "link":

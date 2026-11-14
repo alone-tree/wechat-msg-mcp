@@ -111,6 +111,9 @@ def ensure(
             "skipped": "ttl",
             "ttl_left": round(left, 1),
             "changed_dbs": state.get("changed") or [],
+            "failed": state.get("failed") or [],
+            "failed_detail": state.get("failed_detail") or {},
+            "shadow": state.get("shadow") or [],
         }
 
     files_dir = get_wechat_files_dir()
@@ -148,6 +151,7 @@ def ensure(
                 "seconds": result.get("seconds"),
                 "failed": result.get("failed") or [],
                 "failed_detail": result.get("failed_detail") or {},
+                "shadow": result.get("shadow") or [],
             },
         )
         done = time.time()

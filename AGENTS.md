@@ -110,6 +110,7 @@ wechat-msg-mcp/
 │   │   ├── sender.py           发送者解析与显示名
 │   │   ├── types.py            local_type 解包与 49 子类型
 │   │   ├── image.py            图片与表情解密（供媒体内联）
+│   │   ├── resource.py         消息到本地落盘文件名的映射（message_resource）
 │   │   └── voice.py            语音转写（供媒体内联）
 │   ├── index/
 │   │   └── __init__.py         FTS5 构建、增量、查询、候选表
@@ -132,7 +133,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 55 项）
+├── tests/                      单元测试（共 62 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -157,13 +158,15 @@ wechat-msg-mcp/
 | 增量解密 | 只解 mtime 比副本新的库，日常约 0.5 到 2.5 秒；全量约 10 秒 |
 | 副本句柄规则 | 任何模块都不得长期持有 decrypted/ 下数据库的 sqlite 连接，一律开-查-关并加 immutable=1。Windows 不共享 DELETE，长驻句柄会让所有刷新永久失败（2026-11-14 踩过） |
 | 副本被占用 | 刷新写 <名>.new 旁路副本，读取方按 mtime 取最新（latest_copy）；占用者退出后下一次刷新自动归位 |
-| 媒体失败原因 | media.missing_reason 标明 hardlink_row_missing、file_not_on_disk、no_image_key 等；refresh.failed_detail 标明 too_small、hmac_mismatch、locked 等 |
+| 媒体失败原因 | media.missing_reason 标明 no_local_image、no_image_key 等；refresh.failed_detail 标明 too_small、hmac_mismatch、locked 等 |
 | 微信数据 | F:\xwechat_files，账户 wxid_ 开头，db_storage 下按模块分目录 |
 | 解密输出 | decrypted/，模块分目录：contact/、message/、session/、sns/、favorite/ 等 |
 | 规模 | 消息约 142 万条，12 个 message 分库，约 3140 张会话分表，联系人约 3.3 万，群 771 个（740 个有成员关系与群主，288 个有公告） |
 | 其他数据面 | 朋友圈 3095 条动态与 1099 条互动；收藏 198 条与 32 个标签；好友地区覆盖 1030/1389 |
 | 不可得字段 | 群管理员、群昵称、@提及结构化标记，三项本地不存在 |
 | 一次性事实 | 群主在 chat_room.owner，群公告在 chat_room_info_detail，群成员在 chatroom_member |
+| 媒体文件定位 | 先查 message_resource.db 的 MessageResourceInfo.packed_info（消息到落盘基名），再查 hardlink 登记表，最后按消息自带长度与宽高认文件；三者都不中才算没有 |
+| 长截图 | 长宽比超过 3 的截图保底宽 600，返回时按 1600 高切段，避免客户端压成几十像素宽后读不出字 |
 | 索引 | decrypted/_index/search.db，约 135 万条文本、约 400 MB，全量重建 37 到 50 秒 |
 
 常用命令：
@@ -178,4 +181,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；55 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。
+重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；62 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。
