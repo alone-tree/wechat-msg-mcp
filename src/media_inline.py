@@ -97,10 +97,38 @@ def voice_transcript(src: LocalSource, row: dict) -> tuple[Optional[str], Option
 
 
 def save_voice(blob: bytes, out_dir) -> dict:
-    """保存语音原始音频（微信为 SILK 格式，扩展名 .silk）。"""
+    """保存语音。优先转成 WAV（可直接播放），转不动时回退到原始 SILK。
+
+    微信语音原件是 SILK 格式，普通播放器认不了，所以默认转码。
+    """
+    import tempfile
+
     d = Path(out_dir)
     d.mkdir(parents=True, exist_ok=True)
-    path = d / f"voice-{hashlib.md5(blob).hexdigest()[:16]}.silk"
-    if not path.exists():
-        path.write_bytes(blob)
-    return {"path": str(path), "bytes": len(blob)}
+    tag = hashlib.md5(blob).hexdigest()[:16]
+    try:
+        import pilk
+
+        with tempfile.TemporaryDirectory() as td:
+            silk_path = Path(td) / "a.silk"
+            wav_path = Path(td) / "a.wav"
+            silk_path.write_bytes(blob)
+            pilk.silk_to_wav(str(silk_path), str(wav_path), rate=24000)
+            payload = wav_path.read_bytes()
+        path = d / f"voice-{tag}.wav"
+        if not path.exists():
+            path.write_bytes(payload)
+        duration = None
+        try:
+            import wave
+
+            with wave.open(str(path), "rb") as w:
+                duration = round(w.getnframes() / w.getframerate(), 2)
+        except Exception:
+            pass
+        return {"path": str(path), "bytes": len(payload), "format": "wav", "duration": duration}
+    except Exception:
+        path = d / f"voice-{tag}.silk"
+        if not path.exists():
+            path.write_bytes(blob)
+        return {"path": str(path), "bytes": len(blob), "format": "silk"}

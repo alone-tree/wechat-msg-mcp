@@ -98,7 +98,7 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 
 文件类消息（PDF、表格、压缩包等）不需要参数：读取时自动复制到本进程 exports/run-*/files/，media.path 给副本路径，source_path 保留微信原路径；单文件限 100MB，单次最多 20 个，超过上限的在 media.note 里说明。
 
-语音默认只给转写文字，不存音频；需要原件时传 extract_media，存成 .silk（微信原始格式）。视频默认只给封面，需要用 extract_media 存 mp4 原件。
+语音默认只给转写文字，不存音频；需要原件时传 extract_media，自动从 SILK 转成 WAV（24kHz，可直接播放），转码失败才回退存 .silk。视频默认只给封面，需要用 extract_media 存 mp4 原件。
 
 返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）、hints（按实际内容给出的使用提示）。
 
