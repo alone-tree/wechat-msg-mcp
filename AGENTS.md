@@ -148,6 +148,7 @@ wechat-msg-mcp/
 | 服务端口 | 18907，仅 -Serve 时启用；默认 stdio 由客户端拉起 |
 | 启动方式 | mcp_load 自动拉起，实测约 1 秒，无需预热 |
 | 刷新机制 | 查询前按 TTL（默认 60 秒）增量刷新，失败降级不阻断 |
+| 导出 | 每进程写 exports/run-<pid>-<时间>/，12 小时自动清理；AI 可用 output_dir 指定目录，指定目录不清理 |
 | 增量解密 | 只解 mtime 比副本新的库，日常约 0.5 到 2.5 秒；全量约 10 秒 |
 | 微信数据 | F:\xwechat_files，账户 wxid_ 开头，db_storage 下按模块分目录 |
 | 解密输出 | decrypted/，模块分目录：contact/、message/、session/、sns/、favorite/ 等 |

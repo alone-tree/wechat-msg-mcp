@@ -55,7 +55,7 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 
 注意：微信自身的 WAL 还没 checkpoint 的内容，任何文件级解密都读不到。所以「最新」指的是最近一次落盘的快照。
 
-## 二、MCP 工具
+## 三、MCP 工具
 
 七个工具：list_entities、get_messages、relations、search、sync、list_moments、list_favorites。所有返回都带 data_cutoff（数据截止时间）与 refresh（本次刷新情况）。
 
@@ -124,7 +124,30 @@ action=status 返回数据截止时间、库文件 mtime、联系人、群、索
 
 查收藏。参数：type（text/image/voice/video/link/file/chat_record/note）、keyword、tag、since_date、until_date、limit、offset。返回 item 含 type、title、desc、url、source_user、time、tags。
 
-## 三、CLI（与 MCP 同参）
+## 四、导出与落盘
+
+六个查询工具都支持相同的三个参数（sync 除外）：
+
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| output | inline（默认）或 file | file 无条件落盘 |
+| output_dir | 路径 | 留空写本进程的 exports/run-<pid>-<启动时间>/ |
+| format | json/csv/md/html | get_messages 默认 csv，其余默认 json |
+
+目录规则：
+
+| 项 | 规则 |
+|---|---|
+| 隔离 | 每个进程写自己的 run 目录，多个实例互不覆盖 |
+| 清理 | 进程首次导出时扫一遍，删 run 目录下超过 12 小时的文件，再删空目录 |
+| AI 指定目录 | 写到 output_dir 指定位置，不参与自动清理 |
+| 文件名 | 前缀-时间戳-序号.格式，同秒不撞名 |
+
+返回里的 export 或 auto_export 含 path、files、rows、bytes；auto_export 多一个 reason。
+
+想看最近导出了什么，直接列出 exports/ 下最新的 run 目录即可。
+
+## 五、CLI（与 MCP 同参）
 
 ```text
 wechatq list --scope group --sort members --min-members 100
@@ -156,7 +179,7 @@ wechatq resolve 旧群名
 | --fresh | 无视 TTL，执行前先刷一次 |
 | --no-fresh | 本次不自动刷新，用现有数据（适合脚本连续跑多条） |
 
-## 四、索引
+## 六、索引
 
 索引库 decrypted/_index/search.db，按 (库, 表) 记 local_id 水位，刷新时只补新增。当前规模约 135 万条文本消息、约 400 MB，全量重建 37 到 50 秒，查询毫秒级。
 
@@ -164,7 +187,7 @@ wechatq resolve 旧群名
 
 注意：如果 decrypted/ 被整个删掉，第一次查询会自动全量解密（实测 11.7 秒）并全量建索引（实测 49.7 秒），合计约 62 秒，会超过客户端单次调用超时。这种场景建议先手动跑一次 quick_decrypt.py 与 wechatq index，再用工具。
 
-## 五、排查
+## 七、排查
 
 | 症状 | 处理 |
 |---|---|
@@ -179,7 +202,7 @@ wechatq resolve 旧群名
 | 想确认锁没卡死 | 看 decrypted\_index\refresh.lock；超过 120 秒会被视为残留并自动回收 |
 | 端口被占用 | 仅 -Serve 模式有这问题；改端口并同步客户端 URL |
 
-## 六、已知限制
+## 八、已知限制
 
 - 微信尚未 checkpoint 的 WAL 内容读不到。刷新判据只看主库 mtime，副本也有对应的 -wal 文件但恒为 0 字节。
 - 群管理员、群昵称、@提及结构化标记，本地库里没有。
