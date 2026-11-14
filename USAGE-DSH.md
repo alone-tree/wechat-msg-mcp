@@ -158,6 +158,8 @@ wechatq resolve 旧群名
 
 重建：wechatq index --rebuild
 
+注意：如果 decrypted/ 被整个删掉，第一次查询会自动全量解密（约 10 秒）并全量建索引（约 37 秒），可能超过客户端单次调用超时。这种场景建议先手动跑一次 quick_decrypt.py 与 wechatq index，再用工具。
+
 ## 五、排查
 
 | 症状 | 处理 |
