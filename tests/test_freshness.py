@@ -91,7 +91,7 @@ class EnsureTests(unittest.TestCase):
         self.assertFalse(result["refreshed"])
         self.assertEqual(result["skipped"], "ttl")
         self.assertGreater(result["ttl_left"], 0)
-        self.assertEqual(result["last_changed"], ["x.db"])
+        self.assertEqual(result["changed_dbs"], ["x.db"])
 
     def test_no_source_degrades(self):
         with mock.patch.dict(os.environ, {"WECHAT_REFRESH_TTL": "0", "WECHAT_FILES_DIR": str(Path(self.tmp.name) / "nope")}):

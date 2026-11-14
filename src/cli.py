@@ -246,7 +246,7 @@ def cmd_export(args) -> int:
             break
         cursor = obj["next_cursor"]
     result = export.write_rows(rows, fmt=args.format, prefix="export", out_dir=args.out)
-    result.update({"total": len(rows), "basis": "asc 顺序导出", "data_cutoff": svc.src.data_cutoff()})
+    result.update({"total": len(rows), "basis": "asc 顺序导出", "data_cutoff": svc.src.data_cutoff("message")})
     _print(result, True)
     return 0
 

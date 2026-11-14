@@ -17,7 +17,7 @@ from .db.locator import LocalSource
 
 DEFAULT_TTL = 60
 FAIL_RETRY = 15
-LOCK_STALE = 300
+LOCK_STALE = 120
 
 
 def state_path(src: LocalSource) -> Path:
@@ -110,7 +110,7 @@ def ensure(
             "refreshed": False,
             "skipped": "ttl",
             "ttl_left": round(left, 1),
-            "last_changed": state.get("changed") or [],
+            "changed_dbs": state.get("changed") or [],
         }
 
     files_dir = get_wechat_files_dir()
@@ -149,13 +149,14 @@ def ensure(
                 "failed": result.get("failed") or [],
             },
         )
+        done = time.time()
         return {
             "refreshed": True,
             "skipped": "",
             "changed_dbs": changed,
             "failed": result.get("failed") or [],
             "seconds": result.get("seconds"),
-            "ttl_left": round(float(ttl), 1) if ttl > 0 else 0.0,
+            "ttl_left": round(max(0.0, float(ttl) - (done - now)), 1) if ttl > 0 else 0.0,
             "index": index_result,
         }
     except Exception as exc:

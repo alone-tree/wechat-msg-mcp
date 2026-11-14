@@ -45,9 +45,13 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 |---|---|
 | refreshed | 本次是否执行了刷新 |
 | skipped | 没刷的原因：ttl、locked、disabled、no_source、error |
-| changed_dbs | 实际重新解密的库 |
+| changed_dbs | 实际重新解密的库；skipped=ttl 时是上一次刷新改动的库，字段名两种分支一致 |
 | seconds | 刷新耗时 |
-| ttl_left | 距下次允许刷新的秒数 |
+| ttl_left | 距下次允许刷新的秒数，已扣掉上一次刷新本身的耗时 |
+| failed | 解密失败的库 |
+| index | 有变化时附带的索引增量结果 |
+
+注意：TTL 内不重复检查数据源，所以数据源消失时看到的仍是 skipped=ttl。排查这类问题先设 WECHAT_REFRESH_TTL=0 或调 sync 强制刷新。
 
 注意：微信自身的 WAL 还没 checkpoint 的内容，任何文件级解密都读不到。所以「最新」指的是最近一次落盘的快照。
 
@@ -177,6 +181,7 @@ wechatq resolve 旧群名
 
 ## 六、已知限制
 
+- 微信尚未 checkpoint 的 WAL 内容读不到。刷新判据只看主库 mtime，副本也有对应的 -wal 文件但恒为 0 字节。
 - 群管理员、群昵称、@提及结构化标记，本地库里没有。
 - 朋友圈与收藏只读本地已同步的数据，不会触发微信重新拉取。
 - 好友地区与添加时间是解 protobuf 的尽力而为，部分联系人为空。

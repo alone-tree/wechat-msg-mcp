@@ -63,11 +63,28 @@ class LocalSource:
             dbs = sorted(p for p in msg_dir.glob("msg_*.db") if p.stat().st_size >= 4096)
         return dbs
 
-    def data_cutoff(self) -> str:
-        """数据截止时间：所有参与查询的库中最新的 mtime。"""
-        files = [self.path("contact"), self.path("session"), *self.message_dbs()]
+    def _max_stamp(self, files: list[Path]) -> str:
         stamps = [p.stat().st_mtime for p in files if p.exists()]
         return _fmt_ts(max(stamps)) if stamps else ""
+
+    def data_cutoff(self, kind: str = "all") -> str:
+        """按数据面返回截止时间。
+
+        kind: message / sns / favorite / contact / session / all。
+        分类取各自的库，避免把联系人缓存或头像库的时间算进消息与朋友圈，
+        否则刚更新过联系人就推送会显示成「消息到几点」，误导使用者。
+        """
+        if kind == "message":
+            return self._max_stamp(self.message_dbs())
+        if kind == "sns":
+            return self._max_stamp([self.path("sns")])
+        if kind == "favorite":
+            return self._max_stamp([self.path("favorite")])
+        if kind == "contact":
+            return self._max_stamp([self.path("contact")])
+        if kind == "session":
+            return self._max_stamp([self.path("session"), self.path("contact")])
+        return self._max_stamp([self.path("contact"), self.path("session"), *self.message_dbs()])
 
     def detect(self) -> dict:
         files = [self.path("contact"), self.path("session"), *self.message_dbs()]

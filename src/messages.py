@@ -419,7 +419,7 @@ def list_messages(
         "has_more": has_more,
         "next_cursor": next_cursor,
         "default_window_days": default_window,
-        "data_cutoff": src.data_cutoff(),
+        "data_cutoff": src.data_cutoff("message"),
         "messages": page,
         "unresolved": unresolved,
     }

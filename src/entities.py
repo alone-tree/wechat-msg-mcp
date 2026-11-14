@@ -333,7 +333,7 @@ def list_entities(
         r.pop("_last_ts", None)
     return {
         "scope": scope,
-        "data_cutoff": src.data_cutoff(),
+        "data_cutoff": src.data_cutoff("session"),
         "total": total,
         "returned": len(page),
         "has_more": offset + len(page) < total,
@@ -349,7 +349,7 @@ def resolve_name(src: LocalSource, query: str, limit: int = 5) -> dict:
     q = (query or "").strip()
     out: list[dict] = []
     if not q:
-        return {"query": q, "matched": False, "data_cutoff": src.data_cutoff(), "candidates": []}
+        return {"query": q, "matched": False, "data_cutoff": src.data_cutoff("session"), "candidates": []}
 
     fields = ("id", "name", "remark", "nickname")
     exact = [c for c in contacts if q in (c["username"], c["remark"], c["nickname"])]
@@ -357,7 +357,7 @@ def resolve_name(src: LocalSource, query: str, limit: int = 5) -> dict:
         out = [{"id": c["username"], "name": c["remark"] or c["nickname"] or c["username"],
                 "kind": c["kind"], "matched": "exact",
                 "member_count": gmeta.get(c["username"], {}).get("member_count")} for c in exact[:limit]]
-        return {"query": q, "matched": True, "data_cutoff": src.data_cutoff(), "candidates": out}
+        return {"query": q, "matched": True, "data_cutoff": src.data_cutoff("session"), "candidates": out}
 
     ql = q.lower()
     contains = [
@@ -369,7 +369,7 @@ def resolve_name(src: LocalSource, query: str, limit: int = 5) -> dict:
         out = [{"id": c["username"], "name": c["remark"] or c["nickname"] or c["username"],
                 "kind": c["kind"], "matched": "contains",
                 "member_count": gmeta.get(c["username"], {}).get("member_count")} for c in contains[:limit]]
-        return {"query": q, "matched": True, "data_cutoff": src.data_cutoff(), "candidates": out}
+        return {"query": q, "matched": True, "data_cutoff": src.data_cutoff("session"), "candidates": out}
 
     names = [(c["remark"] or c["nickname"] or c["username"], c) for c in contacts]
     close = difflib.get_close_matches(q, [n for n, _ in names], n=limit, cutoff=0.4)
@@ -377,4 +377,4 @@ def resolve_name(src: LocalSource, query: str, limit: int = 5) -> dict:
     out = [{"id": c["username"], "name": n, "kind": c["kind"], "matched": "similar",
             "member_count": gmeta.get(c["username"], {}).get("member_count")}
            for n, c in names if n in picked]
-    return {"query": q, "matched": bool(out), "data_cutoff": src.data_cutoff(), "candidates": out}
+    return {"query": q, "matched": bool(out), "data_cutoff": src.data_cutoff("session"), "candidates": out}

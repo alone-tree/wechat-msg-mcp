@@ -60,7 +60,7 @@ def _fail(src: LocalSource, subject: str, message: str, kind: str, candidates: l
             }
         ],
         "total": 0,
-        "data_cutoff": src.data_cutoff(),
+        "data_cutoff": src.data_cutoff("message"),
     }
 
 
@@ -112,7 +112,7 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
             "returned": len(members),
             "has_more": total > len(members),
             "members": members,
-            "data_cutoff": src.data_cutoff(),
+            "data_cutoff": src.data_cutoff("message"),
         }
     finally:
         conn.close()
@@ -168,7 +168,7 @@ def common_groups(src: LocalSource, subject: str, limit: int = 200) -> dict:
             "has_more": len(groups) > limit,
             "groups": groups[:limit],
             "basis": "文本消息计数，来自本地索引",
-            "data_cutoff": src.data_cutoff(),
+            "data_cutoff": src.data_cutoff("message"),
         }
     finally:
         conn.close()
@@ -191,7 +191,7 @@ def person_activity(
     lo, hi = _ts(since), _ts_end(until)
     idx = index.count(src)
     if not idx.get("exists"):
-        return {"error": "索引尚未构建，先运行 wechatq index", "data_cutoff": src.data_cutoff()}
+        return {"error": "索引尚未构建，先运行 wechatq index", "data_cutoff": src.data_cutoff("message")}
     iconn = sqlite3.connect(f"file:{index.index_path(src).as_posix()}?mode=ro", uri=True)
     try:
         where = ["sender_id = ?"]
@@ -239,7 +239,7 @@ def person_activity(
         "has_more": len(groups) > len(page),
         "groups": page,
         "basis": "文本消息计数，来自本地索引",
-        "data_cutoff": src.data_cutoff(),
+        "data_cutoff": src.data_cutoff("message"),
     }
 
 
@@ -255,7 +255,7 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
     cid = target["id"]
     tables = resolve_tables(src, cid)
     if not tables:
-        return {"error": "没有消息分表", "subject": subject, "data_cutoff": src.data_cutoff()}
+        return {"error": "没有消息分表", "subject": subject, "data_cutoff": src.data_cutoff("message")}
     lo, hi = _ts(since), _ts_end(until)
     from .entities import load_contacts
 
@@ -312,5 +312,5 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
         "by_type": dict(sorted(by_type.items(), key=lambda x: x[1], reverse=True)),
         "top_senders": [{"name": n, "messages": c} for n, c in top],
         "basis": "精确扫描源库",
-        "data_cutoff": src.data_cutoff(),
+        "data_cutoff": src.data_cutoff("message"),
     }
