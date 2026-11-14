@@ -176,6 +176,25 @@ def _payload(part: list[dict], fmt: str, cols: list[str], kind: str, envelope: d
     return render_html(part, cols)
 
 
+def write_json(payload: dict, out_dir: str = "", prefix: str = "export") -> dict:
+    """整份信封落成一个 JSON 文件，用于一个结果里含多个集合的情况。"""
+    out = Path(out_dir) if out_dir else run_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / _name(prefix, "json")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    collections = [k for k, v in payload.items() if isinstance(v, list) and v]
+    rows = sum(len(payload[k]) for k in collections)
+    return {
+        "exported": True,
+        "path": str(path),
+        "files": [str(path)],
+        "rows": rows,
+        "bytes": path.stat().st_size,
+        "format": "json",
+        "collections": collections,
+    }
+
+
 def write_rows(
     rows: list[dict],
     fmt: str = "csv",

@@ -66,7 +66,10 @@ def _fail(src: LocalSource, subject: str, message: str, kind: str, candidates: l
     }
 
 
-def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
+def group_members(src: LocalSource, subject: str, limit: int = 500, offset: int = 0) -> dict:
+    from .entities import display_names
+
+    offset = max(0, int(offset or 0))
     target, cands = _resolve_kind(src, subject, "group")
     if not target:
         return _fail(src, subject, "未找到该群", "group_members", cands)
@@ -93,8 +96,8 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
             for m in conn.execute(
                 "SELECT c.username, c.remark, c.nick_name, c.alias, c.local_type, c.description, c.extra_buffer"
                 " FROM chatroom_member cm JOIN contact c ON c.id = cm.member_id"
-                " WHERE cm.room_id = ? LIMIT ?",
-                (room_id, limit),
+                " WHERE cm.room_id = ? ORDER BY cm.member_id LIMIT ? OFFSET ?",
+                (room_id, limit, offset),
             ):
                 extra = _extra_fields(m["extra_buffer"] if "extra_buffer" in m.keys() else None)
                 members.append(
@@ -110,14 +113,21 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
                         "region": extra.get("region", ""),
                     }
                 )
+        named = display_names(src).get(gid) or {}
+        has_more = total > offset + len(members)
         return {
             "ok": True,
             "kind": "group_members",
-            "group": {"id": gid, "name": row["remark"] or row["nick_name"] or gid, "owner_id": owner},
+            "group": {
+                "id": gid,
+                "name": named.get("name") or row["remark"] or row["nick_name"] or gid,
+                "name_source": named.get("source") or "id",
+                "owner_id": owner,
+            },
             "total": total,
             "returned": len(members),
-            "has_more": total > len(members),
-            "next": None,
+            "has_more": has_more,
+            "next": offset + len(members) if has_more else None,
             "members": members,
             "data_until": src.data_until("message"),
         }
@@ -125,7 +135,10 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
         conn.close()
 
 
-def common_groups(src: LocalSource, subject: str, limit: int = 200) -> dict:
+def common_groups(src: LocalSource, subject: str, limit: int = 200, offset: int = 0) -> dict:
+    from .entities import display_names
+
+    offset = max(0, int(offset or 0))
     target, cands = _resolve_kind(src, subject, "person")
     if not target:
         return _fail(src, subject, "未找到该联系人", "common_groups", cands)
@@ -158,24 +171,28 @@ def common_groups(src: LocalSource, subject: str, limit: int = 200) -> dict:
                     counts = {cid: n for cid, n in iconn.execute(q, gids)}
                 finally:
                     iconn.close()
+        named = display_names(src)
         groups = [
             {
                 "id": r["username"],
-                "name": r["remark"] or r["nick_name"] or r["username"],
+                "name": (named.get(r["username"]) or {}).get("name") or r["remark"] or r["nick_name"] or r["username"],
+                "name_source": (named.get(r["username"]) or {}).get("source") or "id",
                 "messages": counts.get(r["username"], 0),
             }
             for r in rows
         ]
         groups.sort(key=lambda g: g["messages"], reverse=True)
+        page = groups[offset : offset + limit]
+        has_more = len(groups) > offset + len(page)
         return {
             "ok": True,
             "kind": "common_groups",
             "person": {"id": person_id, "name": target.get("name", "")},
             "total": len(groups),
-            "returned": len(groups[:limit]),
-            "has_more": len(groups) > limit,
-            "next": None,
-            "groups": groups[:limit],
+            "returned": len(page),
+            "has_more": has_more,
+            "next": offset + len(page) if has_more else None,
+            "groups": page,
             "basis": "文本消息计数，来自本地索引",
             "data_until": src.data_until("message"),
         }
@@ -190,8 +207,12 @@ def person_activity(
     since: str = "",
     until: str = "",
     limit: int = 200,
+    offset: int = 0,
 ) -> dict:
+    from .entities import display_names
     from .messages import _ts, _ts_end
+
+    offset = max(0, int(offset or 0))
 
     target, cands = _resolve_kind(src, subject, "person")
     if not target:
@@ -243,14 +264,19 @@ def person_activity(
         rows = iconn.execute(sql, args).fetchall()
     finally:
         iconn.close()
-    from .entities import load_contacts
-
-    names = {
-        c["username"]: c.get("remark") or c.get("nickname") or c["username"]
-        for c in load_contacts(src)
-    }
-    groups = [{"id": cid, "name": names.get(cid, cid), "messages": n, "last_at": _fmt(last)} for cid, n, last in rows]
-    page = groups[:limit]
+    named = display_names(src)
+    groups = [
+        {
+            "id": cid,
+            "name": (named.get(cid) or {}).get("name") or cid,
+            "name_source": (named.get(cid) or {}).get("source") or "id",
+            "messages": n,
+            "last_at": _fmt(last),
+        }
+        for cid, n, last in rows
+    ]
+    page = groups[offset : offset + limit]
+    has_more = len(groups) > offset + len(page)
     return {
         "ok": True,
         "kind": "person_activity",
@@ -259,15 +285,17 @@ def person_activity(
         "total": len(groups),
         "messages_total": sum(g["messages"] for g in groups),
         "returned": len(page),
-        "has_more": len(groups) > len(page),
-        "next": None,
+        "has_more": has_more,
+        "next": offset + len(page) if has_more else None,
         "groups": page,
         "basis": "文本消息计数，来自本地索引",
         "data_until": src.data_until("message"),
     }
 
 
-def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -> dict:
+def activity(
+    src: LocalSource, subject: str, since: str = "", until: str = "", limit: int = 10
+) -> dict:
     """单会话精确统计：总数、按天、按小时、按类型、Top 发言人。"""
     from .db.sender import ContactIndex, build_local_sender_map
     from .messages import _content, _ts, _ts_end, resolve_tables
@@ -330,7 +358,8 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
                 senders[disp] = senders.get(disp, 0) + 1
         finally:
             conn.close()
-    top = sorted(senders.items(), key=lambda x: x[1], reverse=True)[:10]
+    ordered = sorted(senders.items(), key=lambda x: x[1], reverse=True)
+    top = ordered[: max(1, min(10, int(limit or 10)))]
     days = sorted(by_day.items())
     return {
         "ok": True,
@@ -341,6 +370,7 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
         "by_hour": [{"hour": i, "count": n} for i, n in enumerate(by_hour)],
         "by_type": dict(sorted(by_type.items(), key=lambda x: x[1], reverse=True)),
         "top_senders": [{"name": n, "messages": c} for n, c in top],
+        "senders_total": len(ordered),
         "basis": "精确扫描源库",
         "data_until": src.data_until("message"),
     }

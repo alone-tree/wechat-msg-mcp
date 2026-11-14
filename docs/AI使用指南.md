@@ -29,7 +29,7 @@ MCP 已在客户端注册为 stdio 模式，直接 mcp_load 即可，不需要�
 | system | 系统入口：start 返说明书，status 看状态，sync 刷新 | action、force |
 | list_entities | 列会话、联系人或群 | scope、keyword、since_days、only_group、only_unread、min_members、max_members、sort、limit、offset |
 | get_messages | 读某个会话的消息 | targets、sender、start_date、end_date、types、keyword、order、limit、cursor、per_target_limit、detail、include_media、extract_media、output、output_dir、format |
-| relations | 四种关系查询 | kind、subject、targets、since_date、until_date、limit |
+| relations | 四种关系查询 | kind、subject、targets、since_date、until_date、limit、offset（前三种支持翻页，next 是偏移） |
 | search | 一次搜实体与消息 | query、scope、since_date、until_date、limit、offset |
 | list_moments | 朋友圈 | author、keyword、since_date、until_date、limit、offset、with_interactions |
 | list_favorites | 收藏 | type、keyword、tag、since_date、until_date、limit、offset |
@@ -118,7 +118,9 @@ path 什么时候出现：图片与视频封面内联时只给字节，不落盘
 | 想放到指定目录 | output_dir 传绝对路径，该目录不参与自动清理 |
 | 默认导出目录 | exports/run-<进程号>-<启动时间>/，12 小时后自动清理 |
 
-output="file" 时工具自己翻页取满再落盘，返回的 export 里有 rows、bytes、format、columns、pages、is_partial，不用外面写循环。
+output="file" 时工具自己一次扫完再落盘，不用外面写循环：每张会话表只读一遍、按时间顺序流式产出，多会话用堆归并，所以几十万条的大群也只要几秒（实测 30.2 万条的群 6.5 秒）。返回的 export 里有 rows、bytes、format、columns、is_partial、basis 与 tables。
+
+导出固定用 full 档，lite 会被升级，否则 CSV 里没有 chat_name 与 type。结果里还有别的集合（例如 activity 的 by_hour、by_type、top_senders）时，会另存一份 extra JSON 并给 extra_collections，不会只导主表把旁挂数据丢掉。
 
 | format | 形态 | 适合 |
 |---|---|---|

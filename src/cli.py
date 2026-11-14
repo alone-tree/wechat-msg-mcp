@@ -151,6 +151,7 @@ def cmd_rel(args) -> int:
         since=args.since,
         until=args.until,
         limit=args.limit,
+        offset=args.offset,
     )
     if not obj.get("ok", True):
         return _fail(obj)
@@ -303,7 +304,7 @@ def cmd_export(args) -> int:
         order="asc",
         detail="full",
     )
-    result["basis"] = "asc 顺序导出"
+    result["basis"] = "单遍流式导出（asc）"
     _emit(result)
     return 0 if result.get("exported") else 1
 
@@ -370,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--since", default="")
     r.add_argument("--until", default="")
     r.add_argument("--limit", type=int, default=500)
+    r.add_argument("--offset", type=int, default=0, help="分页偏移，配合 next 翻页")
     r.set_defaults(func=cmd_rel)
 
     q = sub.add_parser("search", parents=[common], help="搜索实体与消息")

@@ -231,9 +231,9 @@ inline 模式下若 JSON 文本超过 80000 字符（字符不是字节，中文
 | AI 指定目录 | 写到 output_dir 指定位置，不参与自动清理 |
 | 文件名 | 前缀-时间戳-序号.格式，同秒不撞名 |
 
-返回里的 export 或 auto_export 含 path、files、rows、bytes、format、columns、pages、is_partial；auto_export 多一个 reason。
+返回里的 export 或 auto_export 含 path、files、rows、bytes、format、columns、is_partial、basis、tables；auto_export 多一个 reason，主表之外还有旁挂集合时另给 extra 与 extra_collections。
 
-output=file 时工具自己翻页取满再落盘，不需要外部循环；is_partial=true 表示撞到上限没取全，看 pages 与 rows 判断规模。
+output=file 时工具单遍流式导出：每张会话表只读一次、按时间顺序产出，多会话用堆归并，30.2 万条的群实测 6.5 秒；is_partial=true 表示撞到 20 万行上限没取全，可以用时间段或 targets 分批。导出固定 full 档（lite 自动升级），保证 CSV 里有 chat_name 与 type。
 
 想看最近导出了什么，直接列出 exports/ 下最新的 run 目录即可。
 

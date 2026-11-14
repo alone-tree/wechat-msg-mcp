@@ -15,6 +15,36 @@ AUTO_EXPORT_BYTES = 80000
 # 图片原始字节预算：base64 传输膨胀约 4/3，6MB 原始字节约合 8MB 传输体积。
 INLINE_IMAGE_BUDGET = 6_000_000
 EXPORT_KEYS = ("messages", "entities", "items", "moments", "members", "groups", "by_day")
+# 这些是信封的说明性字段，不当作数据集合另存
+_ENVELOPE_NOISE = {
+    "unresolved",
+    "warnings",
+    "hints",
+    "ambiguous",
+    "media_missing",
+    "media_inline",
+    "media_extract",
+    "file_export",
+    "export",
+    "auto_export",
+    "refresh",
+    "self",
+    "senders",
+    "counts",
+    "total",
+    "query",
+    "kind",
+    "subject",
+    "person",
+    "group",
+    "chat",
+    "scope",
+    "basis",
+    "data_until",
+    "detail",
+    "order",
+    "chat_name",
+}
 
 
 def _dumps(obj) -> str:
@@ -53,9 +83,25 @@ def _respond(
     from . import export
 
     def do_export() -> dict:
-        return export.write_rows(
+        result = export.write_rows(
             _pick_rows(obj, keys), fmt=fmt, out_dir=out_dir, prefix=name, kind=kind, envelope=obj
         )
+        # 主表之外还有别的集合（例如 activity 的 by_hour、by_type、top_senders）时，
+        # 另存一份 JSON 旁挂，否则那些数据只在预览里留 3 条就丢了
+        extra = {
+            k: v
+            for k, v in obj.items()
+            if k not in keys
+            and k not in _ENVELOPE_NOISE
+            and not k.startswith("_")
+            and isinstance(v, (list, dict))
+            and v
+        }
+        if extra:
+            side = export.write_json(extra, out_dir=out_dir, prefix=name + "-extra")
+            result["extra"] = side["path"]
+            result["extra_collections"] = sorted(extra)
+        return result
 
     if output == "file":
         exported = do_export()
@@ -504,6 +550,7 @@ def register(mcp, get_service) -> None:
         since_date: str = "",
         until_date: str = "",
         limit: int = 500,
+        offset: int = 0,
         output: str = "inline",
         output_dir: str = "",
         format: str = "json",
@@ -516,7 +563,8 @@ def register(mcp, get_service) -> None:
             targets: 仅 person_activity 使用，限定群清单；省略即全部群
             since_date: 开始日期 YYYY-MM-DD
             until_date: 结束日期 YYYY-MM-DD
-            limit: 成员或群数量上限
+            limit: 成员、群或发言人数上限
+            offset: 分页偏移，配合 next 翻页（group_members、common_groups、person_activity）
             output: inline 直接返回，file 强制落盘
             output_dir: 落盘目录，留空写本进程的 exports/run-* 目录
             format: 落盘格式 json/csv/md/html
@@ -528,6 +576,7 @@ def register(mcp, get_service) -> None:
             since=since_date,
             until=until_date,
             limit=limit,
+            offset=offset,
         )
         return _respond(
             obj,

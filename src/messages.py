@@ -663,6 +663,7 @@ def list_messages(
             )
     matched = 0
     remaining = 0
+    sender_skipped = 0
     dropped: dict[str, int] = {}
     heaps: dict[str, list] = {}
     db_cache: dict[str, tuple[dict, dict]] = {}
@@ -702,6 +703,10 @@ def list_messages(
             if hi is not None:
                 where.append("create_time <= ?")
                 args.append(hi)
+            if cand_key is not None:
+                # 游标已经比这个时间更早（或更新）的行不用再取，避免每页整表扫
+                where.append("create_time <= ?" if order == "desc" else "create_time >= ?")
+                args.append(cand_key[0])
             if where:
                 sql += " WHERE " + " AND ".join(where)
             for r in conn.execute(sql, args):
@@ -710,7 +715,8 @@ def list_messages(
                 row["chat_name"] = cname or ""
                 if sender:
                     s = sender.lower()
-                    if s not in (row["sender_id"].lower(), row["from"].lower()):
+                    if s not in (row["sender_id"] or "").lower() and s not in (row["from"] or "").lower():
+                        sender_skipped += 1
                         continue
                 if tags:
                     tag = f"app:{row['subtype']}" if row["type"] == "app" else row["type"]
@@ -863,6 +869,11 @@ def list_messages(
             "以下会话还有消息取不到（翻页也拿不到），调大 per_target_limit 或分开查询："
             + "、".join(labels[:10])
         )
+    if sender and not page and sender_skipped:
+        warnings.append(
+            f"sender={sender} 过滤后没有消息（按 wxid 或显示名做包含匹配）；"
+            "先用 list_entities 或 senders 表核对准确名字"
+        )
     if unresolved:
         warnings.append("有目标名没解析到，见 unresolved；不要把它当成该会话没有消息")
     if ambiguous:
@@ -925,6 +936,134 @@ def _db_maps(db: Path, conn) -> tuple[dict, dict]:
         _MAP_CACHE.clear()
     _MAP_CACHE[key] = value
     return value
+
+
+def export_stream(
+    src: LocalSource,
+    targets: Optional[list[str]] = None,
+    sender: str = "",
+    start: str = "",
+    end: str = "",
+    types: Optional[list[str]] = None,
+    keyword: str = "",
+    order: str = "asc",
+    detail: str = "full",
+):
+    """导出专用：每张会话表只扫一遍，按时间顺序流式产出消息。
+
+    与 list_messages 的区别是不算 total、不走游标分页。游标分页为了拿到「剩余部分的前 N 条」
+    每页都要把整张表读一遍并解压，几十万条的大群会慢到不可用；导出只要按顺序全部走完，
+    用一次 ORDER BY 加流式读取即可。返回 (迭代器, 元信息)。
+    """
+    from . import index
+    from .entities import display_names, load_contacts, resolve_name
+
+    detail = str(detail or "full").lower()
+    if detail not in DETAILS:
+        raise ValueError(f"未知详细度: {detail}，可选 {'、'.join(DETAILS)}")
+    order = str(order).lower()
+    if order not in ("asc", "desc"):
+        raise ValueError(f"未知排序方向: {order}，可选 asc 或 desc")
+    lo, hi = _ts(start), _ts_end(end)
+    tags, mains, unknown_types = _wanted_types(types)
+    if unknown_types:
+        raise ValueError(f"无法识别的类型过滤: {'、'.join(unknown_types)}")
+    kw = keyword.strip().lower()
+    my_user = _my_username()
+
+    contact_rows = load_contacts(src)
+    contacts = ContactIndex()
+    for c in contact_rows:
+        contacts.add({"id": c.get("id"), **c})
+    name_by_id = {k: v.get("name", k) for k, v in display_names(src, contact_rows).items()}
+
+    def lookup(wxid: str) -> str:
+        return contacts.name_of(wxid) or ""
+
+    unresolved: list[dict] = []
+    jobs: list[tuple[Optional[str], Optional[str], Path, str]] = []
+    if targets:
+        for t in targets:
+            hit = resolve_name(src, t, limit=3)
+            if not hit.get("candidates"):
+                unresolved.append({"input": t, "reason": "not_found", "candidates": []})
+                continue
+            best = hit["candidates"][0]
+            tables = resolve_tables(src, best["id"])
+            if not tables:
+                unresolved.append(
+                    {"input": t, "reason": "no_message_table", "candidates": hit["candidates"]}
+                )
+                continue
+            for db, tbl in tables:
+                jobs.append((best["id"], best.get("name", ""), db, tbl))
+    else:
+        pairs = index.tables_in_range(src, lo, hi, mains)
+        if pairs is None:
+            pairs = [(db.name, tbl) for db in src.message_dbs() for tbl in _tables_of(db)]
+        db_by_name = {db.name: db for db in src.message_dbs()}
+        for db_name, tbl in pairs:
+            db = db_by_name.get(db_name)
+            if db:
+                jobs.append((None, None, db, tbl))
+
+    show_chat = detail == "lite" and bool(targets) and len({j[0] for j in jobs}) > 1
+    direction = "ASC" if order == "asc" else "DESC"
+
+    def one_job(cid: Optional[str], cname: Optional[str], db: Path, tbl: str):
+        conn = connect_ro(db)
+        try:
+            md5_to_user, sender_map = _db_maps(db, conn)
+            real_cid = cid or md5_to_user.get(tbl[4:] if tbl.startswith("Msg_") else "")
+            real_cname = cname if cid else name_by_id.get(real_cid, real_cid)
+            sql = (
+                "SELECT local_id, create_time, local_type, real_sender_id,"
+                ' message_content, WCDB_CT_message_content FROM "%s"' % tbl
+            )
+            where, args = [], []
+            if lo is not None:
+                where.append("create_time >= ?")
+                args.append(lo)
+            if hi is not None:
+                where.append("create_time <= ?")
+                args.append(hi)
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += f" ORDER BY create_time {direction}, local_id {direction}"
+            for r in conn.execute(sql, args):
+                row = _build_row(db, tbl, r, sender_map, my_user, contacts, lookup)
+                row["chat_id"] = real_cid or ""
+                row["chat_name"] = real_cname or ""
+                if sender:
+                    s = sender.lower()
+                    if s not in (row["sender_id"] or "").lower() and s not in (row["from"] or "").lower():
+                        continue
+                if tags:
+                    tag = f"app:{row['subtype']}" if row["type"] == "app" else row["type"]
+                    if tag not in tags and row["type"] not in tags:
+                        continue
+                if kw and kw not in (row["text"] or "").lower():
+                    continue
+                yield _sort_key(row), _project(row, detail, show_chat)
+        finally:
+            conn.close()
+
+    generators = [one_job(cid, cname, db, tbl) for cid, cname, db, tbl in jobs]
+    if not generators:
+        merged = iter(())
+    elif len(generators) == 1:
+        merged = generators[0]
+    else:
+        merged = heapq.merge(*generators, key=lambda item: item[0], reverse=(order == "desc"))
+
+    meta = {
+        "order": order,
+        "detail": detail,
+        "data_until": src.data_until("message"),
+        "unresolved": unresolved,
+        "tables": len(jobs),
+    }
+    return (row for _key, row in merged), meta
 
 
 def _tables_of(db: Path) -> list[str]:

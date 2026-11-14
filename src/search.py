@@ -20,38 +20,44 @@ def _despace(text: str) -> str:
     return _CJK_SPACE.sub("", text or "")
 
 
-def _entity_hits(src: LocalSource, query: str, kinds: list[str] | None, limit: int) -> list[dict]:
-    from .entities import load_contacts
+def _entity_hits(
+    src: LocalSource, query: str, kinds: list[str] | None, limit: int
+) -> tuple[list[dict], int]:
+    """返回 (本页命中的实体, 命中总数)。总数不受 limit 截断，翻页时也照给。"""
+    from .entities import display_names, load_contacts
 
     q = query.strip().lower()
     if not q:
-        return []
-    out = []
+        return [], 0
+    named = display_names(src)
+    out: list[dict] = []
+    total = 0
     for c in load_contacts(src):
         if kinds and c["kind"] not in kinds:
             continue
+        name = (named.get(c["username"]) or {}).get("name") or c.get("remark") or c.get("nickname") or c["username"]
         fields = {
             "id": c["username"],
             "remark": c.get("remark", ""),
             "nickname": c.get("nickname", ""),
             "alias": c.get("alias", ""),
-            "name": c.get("remark") or c.get("nickname") or c["username"],
+            "name": name,
         }
         for field, value in fields.items():
             if value and q in str(value).lower():
-                out.append(
-                    {
-                        "id": c["username"],
-                        "kind": c["kind"],
-                        "name": fields["name"],
-                        "matched": field,
-                        "value": value,
-                    }
-                )
+                total += 1
+                if len(out) < limit:
+                    out.append(
+                        {
+                            "id": c["username"],
+                            "kind": c["kind"],
+                            "name": name,
+                            "matched": field,
+                            "value": value,
+                        }
+                    )
                 break
-        if len(out) >= limit:
-            break
-    return out
+    return out, total
 
 
 def search(
@@ -81,8 +87,9 @@ def search(
     entities: list[dict] = []
     msgs: list[dict] = []
     msg_total = 0
+    entity_total = 0
     if scope in ("entity", "all"):
-        entities = _entity_hits(src, query, kinds, limit)
+        entities, entity_total = _entity_hits(src, query, kinds, limit)
     if scope in ("message", "all"):
         lo, hi = _ts(since), _ts_end(until)
         from .db.sender import ContactIndex
@@ -128,7 +135,10 @@ def search(
         "entities": entities,
         "messages": msgs,
         "counts": {"entities": len(entities), "messages": len(msgs)},
-        "total": {"entities": len(entities) if offset == 0 else None, "messages": msg_total},
+        "total": {
+            "entities": entity_total if scope in ("entity", "all") else None,
+            "messages": msg_total,
+        },
         "has_more": next is not None,
         "next": next,
     }

@@ -52,42 +52,72 @@ class Service:
         return self._with_fresh(messages.list_messages(self.src, **kwargs))
 
     def export_messages(self, out_dir: str = "", fmt: str = "csv", **kwargs) -> dict:
-        """按游标翻页取满再落盘，不只导当前页。CLI 与 MCP 共用这一份。"""
+        """导出：每张会话表只扫一遍再落盘，几十万条的大群也不会越翻越慢。"""
         from . import export
 
-        base = dict(kwargs)
-        base["include_media"] = False
-        if str(base.get("detail") or "lite") == "lite":
-            base["detail"] = "full"
-        rows: list = []
-        cursor = ""
-        pages = 0
-        envelope: dict = {}
+        limit_rows = int(kwargs.pop("max_rows", 200000) or 200000)
+        detail = str(kwargs.get("detail") or "full").lower()
+        if detail == "lite":
+            # 导出要能分辨会话与类型，lite 不带 chat_name 与 type
+            detail = "full"
+        try:
+            stream, meta = messages.export_stream(
+                self.src,
+                targets=kwargs.get("targets"),
+                sender=kwargs.get("sender", ""),
+                start=kwargs.get("start", ""),
+                end=kwargs.get("end", ""),
+                types=kwargs.get("types"),
+                keyword=kwargs.get("keyword", ""),
+                order=kwargs.get("order") or "asc",
+                detail=detail,
+            )
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "error": {"code": "bad_argument", "message": str(exc)},
+            }
+        rows: list[dict] = []
         partial = False
-        while True:
-            obj = self.get_messages(**{**base, "limit": 1000, "cursor": cursor})
-            if not obj.get("ok", True):
-                return obj
-            if not envelope:
-                envelope = {k: v for k, v in obj.items() if k not in ("messages", "_images")}
-            rows.extend(obj.get("messages") or [])
-            pages += 1
-            cursor = obj.get("next") or ""
-            partial = bool(obj.get("has_more"))
-            if not partial or not cursor or pages >= 200 or len(rows) >= 200000:
+        for row in stream:
+            rows.append(row)
+            if len(rows) >= limit_rows:
+                partial = True
                 break
+        envelope = {
+            "ok": True,
+            "detail": meta["detail"],
+            "total": len(rows),
+            "returned": len(rows),
+            "has_more": partial,
+            "unresolved": meta.get("unresolved") or [],
+            "data_until": meta.get("data_until"),
+        }
         result = export.write_rows(
             rows, fmt=fmt, out_dir=out_dir, prefix="messages", kind="messages", envelope=envelope
         )
-        result.update({"pages": pages, "is_partial": partial})
+        result.update(
+            {
+                "is_partial": partial,
+                "basis": "单遍顺序流式导出",
+                "tables": meta.get("tables"),
+                "unresolved": meta.get("unresolved") or [],
+            }
+        )
+        if partial:
+            result["note"] = f"达到 {limit_rows} 行上限，剩余未导出，可用时间段或 targets 分批"
         return result
 
-    # 关系
     def relations(self, kind: str, subject: str, **kwargs) -> dict:
+        offset = kwargs.get("offset", 0) or 0
         if kind == "group_members":
-            result = relations.group_members(self.src, subject, limit=kwargs.get("limit", 500))
+            result = relations.group_members(
+                self.src, subject, limit=kwargs.get("limit", 500), offset=offset
+            )
         elif kind == "common_groups":
-            result = relations.common_groups(self.src, subject, limit=kwargs.get("limit", 200))
+            result = relations.common_groups(
+                self.src, subject, limit=kwargs.get("limit", 200), offset=offset
+            )
         elif kind == "person_activity":
             result = relations.person_activity(
                 self.src,
@@ -96,10 +126,15 @@ class Service:
                 since=kwargs.get("since", ""),
                 until=kwargs.get("until", ""),
                 limit=kwargs.get("limit", 200),
+                offset=offset,
             )
         elif kind == "activity":
             result = relations.activity(
-                self.src, subject, since=kwargs.get("since", ""), until=kwargs.get("until", "")
+                self.src,
+                subject,
+                since=kwargs.get("since", ""),
+                until=kwargs.get("until", ""),
+                limit=kwargs.get("limit", 10),
             )
         else:
             result = {"error": f"未知关系类型: {kind}"}
