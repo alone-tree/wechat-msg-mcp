@@ -49,11 +49,15 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP syst
 | seconds | 刷新耗时 |
 | ttl_left | 距下次允许刷新的秒数，已扣掉上一次刷新本身的耗时 |
 | failed | 解密失败的库 |
+| failed_detail | 失败库到原因的映射：too_small / read_error / hmac_mismatch / verify_fail / locked |
+| shadow | 正本被占用、改写到旁路副本的库（见下文），内容照常是最新的 |
 | index | 有变化时附带的索引增量结果 |
 
 注意：TTL 内不重复检查数据源，所以数据源消失时看到的仍是 skipped=ttl。排查这类问题先设 WECHAT_REFRESH_TTL=0 或调 sync 强制刷新。
 
 注意：微信自身的 WAL 还没 checkpoint 的内容，任何文件级解密都读不到。所以「最新」指的是最近一次落盘的快照。
+
+副本被占用时：某个长驻进程打开了 decrypted/ 下的旧副本，Windows 就换不了文件。这时刷新把新内容写到 <名>.new，读取方自动用两者里 mtime 更新的那个，查询拿到的一直是最新数据，failed 为空、shadow 里列出被绕开的库。占用者退出后，下一次刷新替换正本并删掉旁路副本，不需要人工处理。
 
 ## 三、MCP 工具
 
@@ -131,7 +135,20 @@ include_media 的媒体约定：
 
 体积上限：内联图片原始字节总计 6MB（传 base64 后约 8MB）。超过的图片不内联，改成落盘并在 media.path 给路径，同时用 media_inline.note 说明还有多少张未内联，这样正常情况不会撞到宿主 10MB 断连。
 
-图片内联只在本地有原图或缓存时成立。微信没下载过的图只有 kind，没有字节，media 里也不会出现 inlined。
+图片内联只在本地有原图或缓存时成立。拿不到字节时 media 里会有 missing_reason 说明原因，不再只有 kind：
+
+| missing_reason | 含义 | 怎么办 |
+|---|---|---|
+| hardlink_row_missing | 本地登记库里没有这个 md5，通常是副本落后或微信还没写登记 | system(action="sync", force=true) 后重查 |
+| file_not_on_disk | 登记了，但 .dat 不在本地（微信按需下载，没点开过就临时不存在） | 在微信里点开该图再看 |
+| no_image_key | 缺 decrypted/media_keys.json | 管理员跑 scripts\extract_image_key.py |
+| decode_failed | 文件在但解不出图（格式变体） | 记录消息后反馈 |
+| no_md5 | 消息里没有图片 md5 | 这类是异常数据 |
+| voice_model_missing | 语音识别模型没装 | 模型放到 decrypted/models/sensevoice/ |
+| no_audio | 语音库里没有这条音频 | 微信侧未落盘 |
+| not_requested / too_many_rows | 显式关了媒体提取，或条数超过 50 条自动跳过 | 传 include_media=true 并缩小范围 |
+
+顶层的 media_missing 给出各类原因的张数，一次就能判断是「没下载」还是「副本落后」。
 
 inline 模式下若 JSON 文本超过 80000 字符（注意是字符不是字节，中文约占 2 到 3 字节）或 200 条，会自动落盘并在 auto_export 里给路径、行数与原因，messages 只留前 3 条预览。
 
@@ -233,6 +250,8 @@ wechatq resolve 旧群名
 | 数据停在某个时间 | 微信未 checkpoint 的 WAL 读不到；切一下聊天窗口或重启微信再刷新 |
 | 目标名找不到 | 用 wechatq resolve 取候选；群改名后会返回相似名 |
 | 文件消息路径为空 | 该文件可能未落本地；exists=false 时只能等微信下载 |
+| 图片只有 kind 没有字节 | 看 media.missing_reason：hardlink_row_missing 先 sync 后重查；file_not_on_disk 是在微信里没打开过 |
+| refresh.failed_detail 里出现 locked | 有进程占着旧副本；数据已写到 <名>.new，查询照常是最新的，重启占用进程后自动归位 |
 | 刷新报密钥错误 | 密钥失效，用管理员运行 scripts\decrypt_standalone.py 重新提取 |
 | 想确认锁没卡死 | 看 decrypted\_index\refresh.lock；超过 120 秒会被视为残留并自动回收 |
 | 端口被占用 | 仅 -Serve 模式有这问题；改端口并同步客户端 URL |
@@ -245,6 +264,6 @@ wechatq resolve 旧群名
 - 好友地区与添加时间是解 protobuf 的尽力而为，部分联系人为空。
 - 不指定 targets 的查询默认限最近 30 天，避免全库扫描。
 - 跨群聚合（common_groups、person_activity）以索引中的文本消息为基数，媒体消息不计入。
-- 图片与语音需显式传 include_media=true 才会内联；本地未落盘的图片只能拿到缩略图或什么都没有。
+- 图片与语音默认就会内联（include_media 默认 true，超过 50 条自动跳过）；本地未落盘的图片只有缩略图或什么也没有，原因写在 media.missing_reason。
 - 只解密有 keys.json 密钥的账号。
 - 聊天正文、wxid、群名不写入日志；真实名称只放 private-docs/。

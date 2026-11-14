@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
 
-from .db.locator import LocalSource
+from .db.locator import LocalSource, latest_copy
 from .db.open_ import connect_ro
 
-_CACHE: dict[tuple[str, str, str], Optional[dict]] = {}
+_CACHE: dict[tuple, Optional[dict]] = {}
 
 
 def _wechat_base() -> Optional[Path]:
@@ -86,10 +86,10 @@ def _locate(root: Optional[Path], chat_id: str, month: str, name: str) -> tuple[
 def resolve(src: LocalSource, md5: str, chat_id: str = "") -> Optional[dict]:
     if not md5:
         return None
-    key = (str(src.root), md5, chat_id)
+    db = latest_copy(src.path("hardlink"))
+    key = (str(src.root), md5, chat_id, db.stat().st_mtime if db.exists() else 0.0)
     if key in _CACHE:
         return _CACHE[key]
-    db = src.path("hardlink")
     result = None
     if db.exists():
         conn = connect_ro(db)
@@ -125,7 +125,7 @@ def resolve(src: LocalSource, md5: str, chat_id: str = "") -> Optional[dict]:
 
 
 _VIDEO_MD5_RE = re.compile(r'<videomsg[^>]*\bmd5="([0-9a-f]{32})"')
-_VIDEO_CACHE: dict[str, Optional[dict]] = {}
+_VIDEO_CACHE: dict[tuple, Optional[dict]] = {}
 
 
 def resolve_video(content: str) -> Optional[dict]:
@@ -136,8 +136,6 @@ def resolve_video(content: str) -> Optional[dict]:
     if not m:
         return None
     md5 = m.group(1)
-    if md5 in _VIDEO_CACHE:
-        return _VIDEO_CACHE[md5]
     result = None
     msg_root = _msg_root()
     db = Path(os.environ.get("WECHAT_DECRYPTED_DIR") or "").expanduser() / "hardlink" / "hardlink.db"
@@ -145,6 +143,10 @@ def resolve_video(content: str) -> Optional[dict]:
         from .config import get_decrypted_dir
 
         db = get_decrypted_dir() / "hardlink" / "hardlink.db"
+    db = latest_copy(db)
+    key = (md5, db.stat().st_mtime if db.exists() else 0.0)
+    if key in _VIDEO_CACHE:
+        return _VIDEO_CACHE[key]
     if db.exists() and msg_root:
         conn = connect_ro(db)
         try:
@@ -189,7 +191,7 @@ def resolve_video(content: str) -> Optional[dict]:
                     break
             if not result:
                 result = {"kind": "video", "name": base, "size": 0, "path": "", "exists": False}
-    _VIDEO_CACHE[md5] = result
+    _VIDEO_CACHE[key] = result
     return result
 
 

@@ -56,6 +56,20 @@ MCP 已在客户端注册为 stdio 模式，直接 mcp_load 即可，不需要�
 
 媒体内联有体积预算：图片总字节超过 6MB 时，超出的不内联，改成落盘给路径，media_inline.note 会说明还有几张。这是为了避免响应体过大导致连接断开。
 
+拿不到图片或语音时，media 里一定带 missing_reason，按它决定下一步：
+
+| missing_reason | 下一步 |
+|---|---|
+| hardlink_row_missing | 先 system(action="sync", force=true)，再重查；通常是副本比微信落后 |
+| file_not_on_disk | 微信按需下载，这张图在本机还没落地，客户端里点开过之后才有 |
+| no_image_key | 缺图片密钥文件，找维护者跑脚本，不是数据问题 |
+| decode_failed / no_md5 | 数据异常，记下 local_id 反馈 |
+| voice_model_missing | 语音模型没装，装了才有转写 |
+| too_many_rows | 条数超过 50 自动跳过，缩小 limit 或加 types 过滤 |
+| not_requested | 这次的调用自己关了 include_media |
+
+顶层 media_missing 给出各原因的条数，用来判断是「没下载」还是「副本落后」，不要猜。
+
 想把媒体原件也存成文件时用 extract_media：留空不存，auto 存到导出目录，也可指定绝对路径。语音会从 SILK 转成可播放的 WAV。
 
 ## 五、结果太大怎么办
@@ -177,7 +191,8 @@ for gid in groups:
 | 群管理员标不出来 | 本地没有这个字段，不是没解析 |
 | search 搜不到朋友圈和收藏 | 它们不进全库索引，要用各自的关键词参数 |
 | 语音没有转写文字 | 语音模型没装，结果里 warnings 会说明模型该放哪 |
-| 图片只有 kind 没有内容 | 本地没有原图或缓存，微信没下载过 |
+| 图片只有 kind 没有内容 | 看 media.missing_reason：file_not_on_disk 是在微信里没打开过；hardlink_row_missing 先 sync 再查 |
+| refresh.failed_detail 出现 locked | 有进程占着旧副本，数据已写到 <名>.new，查询照常最新，无需处理 |
 | 少数文件 exists=false | 微信没下载或已清理，只剩文件名和大小 |
 
 ## 十、常见任务配方

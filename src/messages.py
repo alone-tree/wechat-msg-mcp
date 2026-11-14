@@ -471,6 +471,7 @@ def list_messages(
         f"{last_key[0]}|{last_key[1]}|{last_key[2]}|{last_key[3]}" if last_key else None
     )
     images: list[dict] = []
+    media_missing: dict = {}
     for row in page:
         if not row["chat_name"]:
             row["chat_name"] = name_by_id.get(row["chat_id"], row["chat_id"])
@@ -479,15 +480,20 @@ def list_messages(
             row["media"] = _media(
                 src, row.get("_raw", ""), row["type"], row["subtype"], row["chat_id"]
             )
-        if want_media and row.get("media"):
-            from . import media_inline
-
             kind = (row["media"] or {}).get("kind")
-            if kind == "voice":
+        if isinstance(row.get("media"), dict) and kind in ("image", "voice", "video", "emoticon"):
+            media = row["media"]
+            if not want_media:
+                media["missing_reason"] = "not_requested" if not include_media else "too_many_rows"
+            elif kind == "voice":
                 if not voice_model_ok:
                     voice_model_missing += 1
-                    continue
-                if media_budget["voice"] > 0:
+                    media["missing_reason"] = "voice_model_missing"
+                elif media_budget["voice"] <= 0:
+                    media["missing_reason"] = "budget_exhausted"
+                else:
+                    from . import media_inline
+
                     media_budget["voice"] -= 1
                     text, blob = media_inline.voice_transcript(src, row)
                     if text:
@@ -501,12 +507,14 @@ def list_messages(
                                 "bytes": blob,
                             }
                         )
+                    else:
+                        media["missing_reason"] = "no_audio"
             else:
-                data, source = media_inline.image_bytes_for(row, row.get("_raw", ""))
+                from . import media_inline
+
+                data, source, reason = media_inline.image_bytes_for(row, row.get("_raw", ""))
                 if data:
-                    media = dict(row["media"] or {})
                     media.update({"source": source, "bytes": len(data)})
-                    row["media"] = media
                     images.append(
                         {
                             "local_id": row["local_id"],
@@ -515,6 +523,10 @@ def list_messages(
                             "bytes": data,
                         }
                     )
+                else:
+                    reason = reason or "extract_failed"
+                    media["missing_reason"] = reason
+                    media_missing[reason] = media_missing.get(reason, 0) + 1
         row.pop("_raw", None)
         row.pop("_db", None)
         row.pop("_tbl", None)
@@ -541,6 +553,14 @@ def list_messages(
         hints.append("红包金额本地不存，需拆开后才可见")
     if hints:
         result["hints"] = hints
+    if media_missing:
+        result["media_missing"] = media_missing
+        if media_missing.get("hardlink_row_missing") or media_missing.get("file_not_on_disk"):
+            result.setdefault("warnings", []).append(
+                "部分图片在本地登记库里查不到或未下载（原因见 media.missing_reason）。"
+                "登记库副本落后时先 system(action='sync', force=true) 刷新再查，"
+                "看 refresh.failed_detail 确认是否被占用"
+            )
     if voice_model_missing:
         try:
             from .db import voice as _vm

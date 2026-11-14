@@ -131,7 +131,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 45 项）
+├── tests/                      单元测试（共 55 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -154,6 +154,9 @@ wechat-msg-mcp/
 | 导出 | 每进程写 exports/run-<pid>-<时间>/，12 小时自动清理；AI 可用 output_dir 指定目录，指定目录不清理 |
 | 媒体内联 | include_media=true 时图片、表情、视频封面以图片内容直接返回，语音给转写文字；内联预算 6MB，超出部分落盘给路径 |
 | 增量解密 | 只解 mtime 比副本新的库，日常约 0.5 到 2.5 秒；全量约 10 秒 |
+| 副本句柄规则 | 任何模块都不得长期持有 decrypted/ 下数据库的 sqlite 连接，一律开-查-关并加 immutable=1。Windows 不共享 DELETE，长驻句柄会让所有刷新永久失败（2026-11-14 踩过） |
+| 副本被占用 | 刷新写 <名>.new 旁路副本，读取方按 mtime 取最新（latest_copy）；占用者退出后下一次刷新自动归位 |
+| 媒体失败原因 | media.missing_reason 标明 hardlink_row_missing、file_not_on_disk、no_image_key 等；refresh.failed_detail 标明 too_small、hmac_mismatch、locked 等 |
 | 微信数据 | F:\xwechat_files，账户 wxid_ 开头，db_storage 下按模块分目录 |
 | 解密输出 | decrypted/，模块分目录：contact/、message/、session/、sns/、favorite/ 等 |
 | 规模 | 消息约 142 万条，12 个 message 分库，约 3140 张会话分表，联系人约 3.3 万，群 771 个（740 个有成员关系与群主，288 个有公告） |
@@ -174,4 +177,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；45 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。
+重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；55 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。

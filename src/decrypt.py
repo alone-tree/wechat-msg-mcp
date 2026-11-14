@@ -18,6 +18,8 @@ from pathlib import Path
 
 from Crypto.Cipher import AES
 
+from .db.locator import latest_copy
+
 PAGE_SIZE = 4096
 SALT_SIZE = 16
 KEY_SIZE = 32
@@ -52,12 +54,19 @@ def list_source_dbs(db_storage: Path) -> list[Path]:
     ]
 
 
-def decrypt_to(src: Path, key_hex: str, dst: Path) -> bool:
-    """解密单库，写入 dst。返回是否成功；失败不删除 dst 的既有内容。"""
+def decrypt_to(src: Path, key_hex: str, dst: Path) -> tuple[bool, str]:
+    """解密单库，写入 dst。返回 (成功, 失败原因)；失败不删除 dst 的既有内容。
+
+    原因取值：成功为空串；失败为 too_small / read_error / hmac_mismatch /
+    verify_fail / locked。locked 表示解密成功但旧副本被别的进程占用换不掉。
+    """
     key_bytes = bytes.fromhex(key_hex)
-    data = src.read_bytes()
+    try:
+        data = src.read_bytes()
+    except OSError:
+        return False, "read_error"
     if len(data) < PAGE_SIZE:
-        return False
+        return False, "too_small"
 
     if data.startswith(SQLITE_MAGIC):
         payload = data
@@ -79,7 +88,7 @@ def decrypt_to(src: Path, key_hex: str, dst: Path) -> bool:
             h2 = hmac.new(mac_key2, page1[SALT_SIZE:data_end], hashlib.sha512)
             h2.update(struct.pack("<I", 1))
             if not hmac.compare_digest(h2.digest(), stored):
-                return False
+                return False, "hmac_mismatch"
 
         total_pages = len(data) // PAGE_SIZE
         chunks = []
@@ -105,18 +114,18 @@ def decrypt_to(src: Path, key_hex: str, dst: Path) -> bool:
         conn.close()
     except Exception:
         tmp.unlink(missing_ok=True)
-        return False
+        return False, "verify_fail"
 
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             os.replace(tmp, dst)
-            return True
+            return True, ""
         except PermissionError:
-            if attempt == 2:
+            if attempt == 4:
                 tmp.unlink(missing_ok=True)
-                return False
-            time.sleep(0.1)
-    return False
+                return False, "locked"
+            time.sleep(0.1 * (attempt + 1))
+    return False, "locked"
 
 
 def refresh(
@@ -132,6 +141,8 @@ def refresh(
 
     changed: list[str] = []
     failed: list[str] = []
+    failed_detail: dict[str, str] = {}
+    shadow: list[str] = []
     checked = 0
     for src in sorted(dbs):
         rel = src.relative_to(db_storage)
@@ -141,28 +152,47 @@ def refresh(
             src_stamp = src.stat().st_mtime
         except OSError:
             continue
-        if only_changed and dst.exists():
+        if only_changed:
             try:
-                if src_stamp <= dst.stat().st_mtime:
+                if src_stamp <= latest_copy(dst).stat().st_mtime:
                     continue
             except OSError:
                 pass
-        if decrypt_to(src, key_hex, dst):
+        name = str(rel).replace("\\", "/")
+        alt = dst.with_name(dst.name + ".new")
+        written = dst
+        ok, reason = decrypt_to(src, key_hex, dst)
+        if not ok and reason == "locked":
+            # 正本被别的进程占用换不掉时写旁路副本：读取方按 mtime 取最新的一个，
+            # 数据照常更新，不用等占用者退出。
+            ok, reason = decrypt_to(src, key_hex, alt)
+            if ok:
+                written = alt
+                shadow.append(name)
+        if ok:
             # 副本 mtime 对齐源库，既表达数据版本，也让下次比较判断更准：
             # 解密期间源库再变时，下一次仍然会被识别为需要重解。
             try:
-                os.utime(dst, (src_stamp, src_stamp))
+                os.utime(written, (src_stamp, src_stamp))
             except OSError:
                 pass
-            changed.append(str(rel).replace("\\", "/"))
+            if written is dst:
+                try:
+                    alt.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            changed.append(name)
         else:
-            failed.append(str(rel).replace("\\", "/"))
+            failed.append(name)
+            failed_detail[name] = reason
 
     return {
         "ok": not failed,
         "checked": checked,
         "changed": changed,
         "failed": failed,
+        "failed_detail": failed_detail,
+        "shadow": shadow,
         "seconds": round(time.time() - t0, 2),
         "root": str(decrypted_root),
     }

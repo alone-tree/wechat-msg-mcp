@@ -45,8 +45,9 @@ def main() -> int:
     result = decrypt.refresh(db_storage, out, keys_file, only_changed=not args.full)
     for rel in result["changed"]:
         print(f"  解密 {rel}")
+    detail = result.get("failed_detail") or {}
     for rel in result["failed"]:
-        print(f"  失败 {rel}")
+        print(f"  失败 {rel}（{detail.get(rel, '未知')}）")
     print()
     print(
         f"检查 {result['checked']} 个库，重新解密 {len(result['changed'])} 个，"

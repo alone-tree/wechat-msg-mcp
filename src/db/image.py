@@ -12,7 +12,6 @@ import json
 import os
 import re
 import struct
-import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -25,10 +24,8 @@ _IMG_MD5_RE = re.compile(r"<md5>([0-9a-f]{32})</md5>")
 _IMG_ATTR_MD5_RE = re.compile(r'<img[^>]*\bmd5="([0-9a-f]{32})"')
 _V2_SIG = b"\x07\x08V2\x08\x07"
 
-_lock = threading.Lock()
 _keys_cache: Optional[dict] = None
-_dir_cache: Optional[dict] = None
-_conn = None
+_dir_cache: Optional[tuple] = None
 
 
 def load_keys() -> dict:
@@ -44,26 +41,43 @@ def load_keys() -> dict:
     return _keys_cache
 
 
-def _get_conn():
-    global _conn
-    if _conn is None:
-        import sqlite3
+def _hardlink_conn():
+    """每次查询新开连接，查完立即关闭，不缓存。
 
-        if not os.path.exists(HARDLINK_DB):
-            return None
-        _conn = sqlite3.connect(f"file:{HARDLINK_DB}?mode=ro", uri=True, check_same_thread=False)
-    return _conn
+    Windows 下 sqlite 打开的文件不共享 DELETE，进程长期持有连接会让解密流程
+    无法用 os.replace 替换 decrypted/hardlink/hardlink.db：hardlink 副本永久
+    停在旧版本，登记之后收到的图片就只剩 kind 标记。2026-11-14 实测确认。
+    """
+    import sqlite3
+
+    from .locator import latest_copy
+
+    target = latest_copy(Path(HARDLINK_DB))
+    if not target.exists():
+        return None
+    # immutable=1：不生成 -wal / -shm 旁文件，也不留下写句柄
+    return sqlite3.connect(f"file:{target.as_posix()}?mode=ro&immutable=1", uri=True)
 
 
 def _dir_map(conn) -> dict:
+    """dir2id 映射，按副本 mtime 缓存；副本被替换后自动重读。"""
     global _dir_cache
-    if _dir_cache is not None:
-        return _dir_cache
     try:
-        _dir_cache = dict(conn.execute("SELECT rowid, username FROM dir2id").fetchall())
+        stamp = os.stat(HARDLINK_DB + ".new").st_mtime
+    except OSError:
+        stamp = 0.0
+    try:
+        stamp = max(stamp, os.stat(HARDLINK_DB).st_mtime)
+    except OSError:
+        pass
+    if _dir_cache and _dir_cache[0] == stamp:
+        return _dir_cache[1]
+    try:
+        mapping = dict(conn.execute("SELECT rowid, username FROM dir2id").fetchall())
     except Exception:
-        _dir_cache = {}
-    return _dir_cache
+        mapping = {}
+    _dir_cache = (stamp, mapping)
+    return mapping
 
 
 def _account_dirs() -> list[Path]:
@@ -76,32 +90,36 @@ def _account_dirs() -> list[Path]:
     return out
 
 
-def find_image_dat_bases(content: str) -> list[Path]:
-    """消息XML -> 该消息的图片文件候选路径（原图、高清、缩略图按优先级）。"""
+def image_locate(content: str) -> tuple[list[Path], str]:
+    """消息XML -> (本地 .dat 候选路径, 找不到的原因)。
+
+    原因取值：no_md5 / no_hardlink_db / hardlink_unreadable / hardlink_row_missing
+    / dir_map_missing / file_not_on_disk。成功时原因为空串。
+    """
     if not content:
-        return []
+        return [], "no_content"
     m = _IMG_MD5_RE.search(content) or _IMG_ATTR_MD5_RE.search(content)
     if not m:
-        return []
-    md5 = m.group(1)
-    conn = _get_conn()
+        return [], "no_md5"
+    conn = _hardlink_conn()
     if conn is None:
-        return []
+        return [], "no_hardlink_db"
     try:
-        with _lock:
-            row = conn.execute(
-                "SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE md5=? LIMIT 1",
-                (md5,),
-            ).fetchone()
-            if not row:
-                return []
-            dmap = _dir_map(conn)
+        row = conn.execute(
+            "SELECT file_name, dir1, dir2 FROM image_hardlink_info_v4 WHERE md5=? LIMIT 1",
+            (m.group(1),),
+        ).fetchone()
+        if not row:
+            return [], "hardlink_row_missing"
+        dmap = _dir_map(conn)
     except Exception:
-        return []
+        return [], "hardlink_unreadable"
+    finally:
+        conn.close()
     file_name, dir1, dir2 = row
     d1, d2 = dmap.get(dir1), dmap.get(dir2)
     if not d1 or not d2:
-        return []
+        return [], "dir_map_missing"
     base = file_name[:-4] if file_name.endswith(".dat") else file_name
     # 数据库里的 file_name 可能自带变体后缀（_h / _t），去掉以免拼出 _h_h.dat 这种空名
     for vsuf in ("_h", "_t"):
@@ -117,7 +135,12 @@ def find_image_dat_bases(content: str) -> list[Path]:
                 out.append(p)
         if out:
             break
-    return out
+    return out, ("" if out else "file_not_on_disk")
+
+
+def find_image_dat_bases(content: str) -> list[Path]:
+    """消息XML -> 该消息的图片文件候选路径（原图、高清、缩略图按优先级）。"""
+    return image_locate(content)[0]
 
 
 def find_image_dat(content: str) -> Optional[Path]:
@@ -376,11 +399,12 @@ def _decode_dat(dat: Path, aes_key: str, xor_key) -> Optional[bytes]:
 
 def extract_image_meta(
     content: str, chat_username: str = "", create_time: int = 0
-) -> tuple[Optional[bytes], str]:
-    """消息内容 -> (标准化 JPEG 字节, 来源标记)。
+) -> tuple[Optional[bytes], str, str]:
+    """消息内容 -> (标准化 JPEG 字节, 来源标记, 失败原因)。
 
     来源标记：dat（原图/高清）、cache（微信渲染缓存）、thumb（小缩略图）。
     降级顺序按清晰度排：原图/高清 → 渲染缓存 → 缩略图。
+    失败原因原样透出，交给上层写进 media.missing_reason，不再静默返回空。
     """
     keys = load_keys()
     aes_key = keys.get("image_aes_key")
@@ -391,27 +415,31 @@ def extract_image_meta(
         except (TypeError, ValueError):
             xor_key = None
 
-    variants = find_image_dat_bases(content)
+    variants, reason = image_locate(content)
     if aes_key:
         for dat in variants:
             if dat.stem.endswith("_t"):
                 continue
             jpeg = _decode_dat(dat, aes_key, xor_key)
             if jpeg:
-                return jpeg, "dat"
+                return jpeg, "dat", ""
     cached = find_render_cache_image(chat_username, create_time)
     if cached:
         jpeg = normalize_to_jpeg(cached)
         if jpeg:
-            return jpeg, "cache"
+            return jpeg, "cache", ""
     if aes_key:
         for dat in variants:
             if not dat.stem.endswith("_t"):
                 continue
             jpeg = _decode_dat(dat, aes_key, xor_key)
             if jpeg:
-                return jpeg, "thumb"
-    return None, ""
+                return jpeg, "thumb", ""
+    if not aes_key:
+        return None, "", reason or "no_image_key"
+    if variants:
+        return None, "", "decode_failed"
+    return None, "", reason
 
 
 def extract_image_bytes(
@@ -436,18 +464,19 @@ def extract_video_cover(content: str) -> Optional[bytes]:
     m = _VIDEO_MD5_RE.search(content)
     if not m:
         return None
-    conn = _get_conn()
+    conn = _hardlink_conn()
     if conn is None:
         return None
     try:
-        with _lock:
-            row = conn.execute(
-                "SELECT file_name, dir1 FROM video_hardlink_info_v4 WHERE md5=? LIMIT 1",
-                (m.group(1),),
-            ).fetchone()
-            dmap = _dir_map(conn)
+        row = conn.execute(
+            "SELECT file_name, dir1 FROM video_hardlink_info_v4 WHERE md5=? LIMIT 1",
+            (m.group(1),),
+        ).fetchone()
+        dmap = _dir_map(conn) if row else {}
     except Exception:
         return None
+    finally:
+        conn.close()
     if not row:
         return None
     file_name, dir1 = row

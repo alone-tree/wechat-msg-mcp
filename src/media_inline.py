@@ -33,14 +33,15 @@ def save_jpeg(src: LocalSource, data: bytes, tag: str, out_dir: Optional[Path] =
     return {"path": str(path), "bytes": len(data)}
 
 
-def image_bytes_for(row: dict, raw_text: str) -> tuple[Optional[bytes], str]:
-    """按消息类型提取可内联的图片字节，返回 (JPEG 字节, 来源标记)。
+def image_bytes_for(row: dict, raw_text: str) -> tuple[Optional[bytes], str, str]:
+    """按消息类型提取可内联的图片字节，返回 (JPEG 字节, 来源标记, 失败原因)。
 
     来源标记：dat 原图、cache 微信渲染缓存、thumb 缩略图、cover 视频封面、emoticon 表情首帧。
+    失败原因非空时上层写进 media.missing_reason，让调用方知道是没找到、没解密还是没下载。
     """
     kind = (row.get("media") or {}).get("kind")
     if kind not in ("image", "video", "emoticon"):
-        return None, ""
+        return None, "", ""
     from .db import image as image_mod
 
     if kind == "image":
@@ -48,8 +49,10 @@ def image_bytes_for(row: dict, raw_text: str) -> tuple[Optional[bytes], str]:
             raw_text, row.get("chat_id", ""), int(row.get("ts") or 0)
         )
     if kind == "video":
-        return image_mod.extract_video_cover(raw_text), "cover"
-    return image_mod.extract_emoticon_bytes(raw_text), "emoticon"
+        cover = image_mod.extract_video_cover(raw_text)
+        return cover, "cover", ("" if cover else "cover_missing")
+    blob = image_mod.extract_emoticon_bytes(raw_text)
+    return blob, "emoticon", ("" if blob else "emoticon_unavailable")
 
 
 def _voice_blob(src: LocalSource, chat_id: str, local_id: int) -> Optional[bytes]:

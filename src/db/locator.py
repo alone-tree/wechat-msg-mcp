@@ -23,6 +23,20 @@ def _fmt_ts(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def latest_copy(path: Path) -> Path:
+    """同一个库的最新副本：正本与旁路副本（<名>.new）里取 mtime 较新且存在的。
+
+    旁路副本用于正本被别的进程占用、无法原子替换时继续供新数据，
+    读取方照常按可读文件查询，不需要知道背后发生了什么。
+    """
+    path = Path(path)
+    alt = path.with_name(path.name + ".new")
+    cands = [p for p in (path, alt) if p.exists()]
+    if not cands:
+        return path
+    return max(cands, key=lambda p: p.stat().st_mtime)
+
+
 @dataclass
 class LocalSource:
     """本地解密目录：contact/contact.db、message/message_N.db ..."""
@@ -46,7 +60,10 @@ class LocalSource:
         }
         if kind not in table:
             raise KeyError(f"未知数据源类型: {kind}")
-        return table[kind]
+        if kind == "media_dir":
+            return table[kind]
+        # 正本被占用时刷新会写 <名>.new，读取方统一取最新的那个
+        return latest_copy(table[kind])
 
     def message_dbs(self) -> list[Path]:
         """微信 4.x 的消息分库，排除资源库、媒体库与旧名。"""

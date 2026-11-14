@@ -147,6 +147,7 @@ def ensure(
                 "changed": changed,
                 "seconds": result.get("seconds"),
                 "failed": result.get("failed") or [],
+                "failed_detail": result.get("failed_detail") or {},
             },
         )
         done = time.time()
@@ -155,6 +156,8 @@ def ensure(
             "skipped": "",
             "changed_dbs": changed,
             "failed": result.get("failed") or [],
+            "failed_detail": result.get("failed_detail") or {},
+            "shadow": result.get("shadow") or [],
             "seconds": result.get("seconds"),
             "ttl_left": round(max(0.0, float(ttl) - (done - now)), 1) if ttl > 0 else 0.0,
             "index": index_result,
