@@ -73,6 +73,8 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 | sort | last_time（默认）/ members / name |
 | limit / offset | 分页 |
 
+返回字段含 gender（性别）与 region（地区）。性别来自 contact.extra_buffer 的 protobuf 字段 2：1 男、2 女、0 未设置。实测好友 100% 有资料包，群成员与非好友约 78%，本地没缓存过资料卡的（只在群里见过）会返回空。库里真正填了性别的比例本身不高，全库 26718 条资料中男 711、女 860。
+
 返回字段含 id、kind、name、remark、nickname、alias、is_friend、member_count、owner_id、owner_name、notice、last_active_at、last_message、unread，以及 total、has_more。
 
 ### get_messages
