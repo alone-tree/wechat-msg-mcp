@@ -209,6 +209,36 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
 
 def register(mcp, get_service) -> None:
     @mcp.tool()
+    def start() -> str:
+        """入口工具：返回完整使用说明与当前数据状态。新会话先调它。
+
+        平台无关：任何 MCP 客户端都能调，不依赖宿主自身的引导能力。
+        返回里的 guide 写了八个工具怎么用、各类消息怎么读、复杂查询怎么编排。
+        """
+        from .guide import GUIDE
+
+        svc = get_service()
+        st = svc.status()
+        idx = st.get("index") or {}
+        return _dumps(
+            {
+                "server": "wechat-msg-mcp",
+                "intro": "本机微信聊天记录只读查询，数据不出本机。",
+                "guide": GUIDE,
+                "status": {
+                    "state": st.get("state"),
+                    "data_cutoff": st.get("data_cutoff"),
+                    "message_dbs": st.get("message_dbs"),
+                    "contacts": st.get("contacts"),
+                    "groups": st.get("groups"),
+                    "index_rows": idx.get("rows"),
+                    "index_size_mb": idx.get("size_mb"),
+                },
+                "next": "直接调用其余七个工具；要立刻拿最新数据调 sync(action=\"sync\")。",
+            }
+        )
+
+    @mcp.tool()
     def list_entities(
         scope: str = "session",
         keyword: str = "",
