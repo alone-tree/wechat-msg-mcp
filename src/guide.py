@@ -48,6 +48,8 @@ GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个
 
 体积保护：内联图片总字节超过 6MB 时，超出的不内联，改成落盘并在 media.path 给路径，media_inline.note 会说明还有多少张。
 
+拿不到图或语音时 media 里一定带 missing_reason，别猜：hardlink_row_missing（本地登记库没有这个图，先 system(action="sync", force=true) 再查）、file_not_on_disk（微信没下载过这张图，客户端点开之后才会落本地）、no_image_key（缺图片密钥，找维护者）、decode_failed、voice_model_missing、too_many_rows、not_requested。顶层 media_missing 给各类张数。refresh.failed_detail 是解密失败原因，refresh.shadow 表示正本被别的进程占用、已写到旁路副本，查询到的仍是最新数据。
+
 想把媒体原件存成文件时用 extract_media：留空不存，auto 存到导出目录，也可传绝对目录。语音会从微信的 SILK 转成可直接播放的 WAV。
 
 【结果很大时】

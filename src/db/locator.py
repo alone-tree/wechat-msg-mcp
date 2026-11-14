@@ -37,6 +37,26 @@ def latest_copy(path: Path) -> Path:
     return max(cands, key=lambda p: p.stat().st_mtime)
 
 
+def latest_in_dir(directory: Path, pattern: str) -> list[Path]:
+    """目录下按同一库去重取最新：X.db 与 X.db.new 同时存在时只留较新的那个。
+
+    分库扫描一律走这里，否则旁路副本会被当成另一个库，导致同一张表被查两遍。
+    """
+    picked: dict[str, Path] = {}
+    for p in sorted(directory.glob(pattern)) + sorted(directory.glob(pattern + ".new")):
+        if not p.is_file():
+            continue
+        base = p.name[:-4] if p.name.endswith(".new") else p.name
+        cur = picked.get(base)
+        try:
+            newer = cur is None or p.stat().st_mtime > cur.stat().st_mtime
+        except OSError:
+            continue
+        if newer:
+            picked[base] = p
+    return [picked[k] for k in sorted(picked)]
+
+
 @dataclass
 class LocalSource:
     """本地解密目录：contact/contact.db、message/message_N.db ..."""
@@ -72,12 +92,12 @@ class LocalSource:
             return []
         dbs = [
             p
-            for p in sorted(msg_dir.glob("*.db"))
+            for p in latest_in_dir(msg_dir, "*.db")
             if p.stat().st_size >= 4096
             and not p.name.startswith(("message_fts", "message_resource", "media_", "weclaw"))
         ]
         if not dbs:
-            dbs = sorted(p for p in msg_dir.glob("msg_*.db") if p.stat().st_size >= 4096)
+            dbs = [p for p in latest_in_dir(msg_dir, "msg_*.db") if p.stat().st_size >= 4096]
         return dbs
 
     def _max_stamp(self, files: list[Path]) -> str:

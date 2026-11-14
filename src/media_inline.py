@@ -56,7 +56,9 @@ def image_bytes_for(row: dict, raw_text: str) -> tuple[Optional[bytes], str, str
 
 
 def _voice_blob(src: LocalSource, chat_id: str, local_id: int) -> Optional[bytes]:
-    for db in sorted((src.root / "message").glob("media_*.db")):
+    from .db.locator import latest_in_dir
+
+    for db in latest_in_dir(src.root / "message", "media_*.db"):
         conn = connect_ro(db)
         try:
             row = conn.execute(
