@@ -105,3 +105,12 @@ def test_write_rows_empty_keeps_header(tmp_path):
     result = export.write_rows([], fmt="csv", out_dir=str(tmp_path), kind="messages")
     assert result["empty"] is True
     assert open(result["path"], encoding="utf-8-sig").read().startswith("time")
+
+
+def test_html_render_is_sectioned_not_table(tmp_path):
+    result = export.write_rows(ROWS, fmt="html", out_dir=str(tmp_path), kind="messages", envelope=OBJ)
+    body = open(result["path"], encoding="utf-8").read()
+    assert "<table>" not in body
+    assert "<h3>" in body
+    assert "第一行\n第二行" in body
+    assert "的另一行" in body or "带竖线|和换行" in body

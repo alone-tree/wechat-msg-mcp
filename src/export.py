@@ -163,6 +163,8 @@ def _payload(part: list[dict], fmt: str, cols: list[str], kind: str, envelope: d
             return render.render_md(obj)
         if fmt == "ndjson":
             return render.render_ndjson(obj)
+        if fmt == "html":
+            return render.render_html(obj)
     if fmt == "json":
         return json.dumps(part, ensure_ascii=False, indent=2)
     if fmt == "csv":

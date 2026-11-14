@@ -91,6 +91,35 @@ def render_md(obj: dict, default_chat: str = "") -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def render_html(obj: dict, default_chat: str = "") -> str:
+    """消息的 HTML 导出：按会话分节，一条一段，保留换行。给浏览器看，不出表格。"""
+    import html as html_mod
+
+    rows = obj.get("messages") or []
+    out = [
+        "<!doctype html><meta charset='utf-8'><title>聊天记录导出</title>",
+        "<style>body{font:14px system-ui;margin:24px;color:#222;background:#fff}"
+        "h3{margin:28px 0 8px;padding-bottom:4px;border-bottom:1px solid #ddd}"
+        ".m{margin:0 0 10px;line-height:1.6}.t{color:#888;margin-right:8px}"
+        ".who{color:#0a6;font-weight:600;margin-right:6px}.body{white-space:pre-wrap}"
+        ".path{color:#888;font-size:12px;white-space:pre-wrap}.f{margin-top:24px;color:#666}</style>",
+    ]
+    for chat, items in _sections(rows, default_chat):
+        out.append(f"<h3>{html_mod.escape(chat or '（未命名会话）')}（{len(items)} 条）</h3>")
+        for m in items:
+            text = html_mod.escape(_body(m))
+            who = html_mod.escape(_who(m))
+            out.append(
+                f"<div class='m'><span class='t'>{html_mod.escape(str(m.get('time') or ''))}</span>"
+                f"<span class='who'>{who}</span><span class='body'>{text}</span></div>"
+            )
+            media = m.get("media")
+            if isinstance(media, dict) and media.get("path"):
+                out.append(f"<div class='path'>{html_mod.escape(str(media['path']))}</div>")
+    out.append(f"<div class='f'>{html_mod.escape(_summary(obj))}</div>")
+    return "\n".join(out) + "\n"
+
+
 def iter_ndjson(rows: Iterable[dict], default_chat: str = "") -> Iterable[str]:
     import json
 

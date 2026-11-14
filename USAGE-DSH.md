@@ -273,7 +273,7 @@ python -m src.cli resolve 旧群名
 | 不带参数 | NDJSON，一行一个对象，可直接管道给脚本 |
 | --json | 紧凑信封，单行 |
 | --pretty | 缩进信封 |
-| --format text / md | 人读文本，按会话分节、一行一条。messages 还接受 ndjson/json/csv，html 只有 export 支持，messages 传 html 会被参数校验挡下 |
+| --format text / md | 人读文本，按会话分节、一行一条。messages 还接受 ndjson/json/csv，html 只有 export 支持，messages 传 html 会被参数校验挡下；export 的 html 也按会话分节，不再出表格 |
 | --out 目录 | 配 --output file 指定落盘目录 |
 | --detail lite/full/raw | 消息详细度，默认 full |
 | --per-target-limit N | 多会话时每个会话上限，0 为不限 |
