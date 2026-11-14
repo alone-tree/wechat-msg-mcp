@@ -4,21 +4,20 @@
 改说明时只改这里，两处同时生效。
 """
 
-GUIDE = """微信聊天记录只读查询（本机数据，不联网）。八个工具，其中 start 是入口。
+GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个工具，其中 system 是入口。
 
 【默认行为】
 - 调任何查询工具时，服务会自己按 TTL（默认 60 秒）增量刷新解密数据。不需要先跑脚本，也不需要重启服务。
 - 结果里的 refresh 字段说明本次做了什么：refreshed=true 表示刚解了 changed_dbs 里的库；skipped=ttl 表示在 TTL 内直接用了现有数据；locked 表示另一个进程正在刷。
 - data_cutoff 是该数据源最后一次写入的时间，不是最新消息时间。消息看 message 库，朋友圈看 sns 库，收藏看 favorite 库，会话列表看 session 与 contact。
-- 需要绕过 TTL 立刻拉最新时，调 sync(action="sync")。
+- 需要绕过 TTL 立刻拉最新时，调 system(action="sync")。
 
-【八个工具】
-- start：入口工具。返回本说明书与当前数据状态，新会话先调它。
+【七个工具】
+- system：系统入口，三种固定动作。action=start 返回本说明书与当前数据状态，新会话先调它；action=status 只看数据新鲜度；action=sync 立刻刷新解密数据与索引。
 - list_entities：列会话 / 联系人 / 群。scope=session|contact|group|all。返回名称、备注、微信号、地区、性别、好友关系、群成员数、群主、群公告、未读数、最后活跃时间。
 - get_messages：读消息。targets 可给多个会话（人或群混传），sender 限定发言人，types 限定类型，时间用 start_date / end_date。默认最新优先，数组第一个就是最新的。
 - relations：四种关系。group_members 群成员；common_groups 某人所在的群；person_activity 某人在多群的发言；activity 单会话统计（按天、按小时、按类型、发言人排行）。
 - search：一次搜实体与消息。消息带命中片段，支持 offset 翻页。
-- sync：action=status 看数据新鲜度；action=sync 立刻刷新。
 - list_moments：朋友圈动态，含图片链接、点赞、评论。
 - list_favorites：收藏条目，含类型、链接、标签。
 

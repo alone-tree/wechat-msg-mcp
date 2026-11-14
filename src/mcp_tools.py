@@ -209,16 +209,27 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
 
 def register(mcp, get_service) -> None:
     @mcp.tool()
-    def start() -> str:
-        """入口工具：返回完整使用说明与当前数据状态。新会话先调它。
+    def system(action: str = "start", force: bool = True) -> str:
+        """系统入口：启动引导、看数据状态、刷新数据，三合一的固定动作。
+
+        Args:
+            action: start 返回完整使用说明与当前状态（新会话先调这个）；
+                status 只看数据新鲜度；sync 立即增量刷新解密数据与索引
+            force: 仅 action=sync 时生效，默认 True 忽略 TTL
 
         平台无关：任何 MCP 客户端都能调，不依赖宿主自身的引导能力。
-        返回里的 guide 写了八个工具怎么用、各类消息怎么读、复杂查询怎么编排。
+        其余六个工具是查询类，会自己按 TTL（默认 60 秒）增量刷新。
         """
+        svc = get_service()
+        if action == "sync":
+            return _dumps(svc.refresh(force=force))
+
+        st = svc.status()
+        if action == "status":
+            return _dumps(st)
+
         from .guide import GUIDE
 
-        svc = get_service()
-        st = svc.status()
         idx = st.get("index") or {}
         return _dumps(
             {
@@ -234,7 +245,7 @@ def register(mcp, get_service) -> None:
                     "index_rows": idx.get("rows"),
                     "index_size_mb": idx.get("size_mb"),
                 },
-                "next": "直接调用其余七个工具；要立刻拿最新数据调 sync(action=\"sync\")。",
+                "next": "直接调用其余六个查询工具；要立刻拿最新数据调 system(action=\"sync\")。",
             }
         )
 
@@ -444,22 +455,6 @@ def register(mcp, get_service) -> None:
             query, scope=scope, since=since_date, until=until_date, limit=limit, offset=offset
         )
         return _respond(obj, "search", ("messages", "entities"), output, format, output_dir)
-
-    @mcp.tool()
-    def sync(action: str = "status", force: bool = True) -> str:
-        """查看数据新鲜度，或立即刷新解密数据与索引。
-
-        其余查询工具会自动按 TTL（默认 60 秒）刷新，无需手动调用；
-        需要绕过 TTL 立刻拉最新时用本工具。
-
-        Args:
-            action: status 只看状态，sync 执行刷新
-            force: 忽略 TTL，默认 True；传 False 则受 TTL 约束
-        """
-        svc = get_service()
-        if action == "sync":
-            return _dumps(svc.refresh(force=force))
-        return _dumps(svc.status())
 
     @mcp.tool()
     def list_moments(
