@@ -77,6 +77,7 @@ def load_contacts(src: LocalSource) -> list[dict]:
                     "nickname": (r[nick_col] if nick_col else "") or "",
                     "description": (r["description"] if "description" in r.keys() else "") or "",
                     "region": extra.get("region", ""),
+                    "gender": extra.get("gender", ""),
                     "add_time": extra.get("add_time", ""),
                 }
             )
@@ -155,12 +156,22 @@ def _extra_fields(blob) -> dict:
     province = text(6)
     city = text(7)
     region = " ".join(x for x in (province, city) if x)
+    # 字段 2 是性别枚举：1 男、2 女、0 未设置。实测好友全覆盖，群成员约 78%。
+    gender = ""
+    for v in fields.get(2, []):
+        if isinstance(v, int):
+            if v == 1:
+                gender = "男"
+                break
+            if v == 2:
+                gender = "女"
+                break
     add_time = ""
     for v in fields.get(41, []):
         if isinstance(v, int) and 1000000000 < v < 2200000000:
             add_time = _fmt(v)
             break
-    return {"region": region, "add_time": add_time}
+    return {"region": region, "add_time": add_time, "gender": gender}
 
 
 def group_meta(src: LocalSource) -> dict[str, dict]:
@@ -244,6 +255,7 @@ def _entity(row: dict, gmeta: dict, smeta: dict) -> dict:
         "alias": row.get("alias", ""),
         "is_friend": row.get("is_friend"),
         "region": row.get("region", ""),
+        "gender": row.get("gender", ""),
         "add_time": row.get("add_time", ""),
         "member_count": g.get("member_count"),
         "owner_id": g.get("owner"),

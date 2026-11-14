@@ -14,6 +14,7 @@ from typing import Optional
 from . import index
 from .db.locator import LocalSource
 from .db.open_ import connect_ro, table_exists
+from .entities import _extra_fields
 
 
 def _fmt(ts) -> str:
@@ -89,11 +90,12 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
                 "SELECT COUNT(*) FROM chatroom_member WHERE room_id = ?", (room_id,)
             ).fetchone()[0]
             for m in conn.execute(
-                "SELECT c.username, c.remark, c.nick_name, c.alias, c.local_type, c.description"
+                "SELECT c.username, c.remark, c.nick_name, c.alias, c.local_type, c.description, c.extra_buffer"
                 " FROM chatroom_member cm JOIN contact c ON c.id = cm.member_id"
                 " WHERE cm.room_id = ? LIMIT ?",
                 (room_id, limit),
             ):
+                extra = _extra_fields(m["extra_buffer"] if "extra_buffer" in m.keys() else None)
                 members.append(
                     {
                         "id": m["username"],
@@ -103,6 +105,8 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
                         "alias": m["alias"] or "",
                         "relation": "好友" if m["local_type"] == 1 else "非好友",
                         "signature": m["description"] or "",
+                        "gender": extra.get("gender", ""),
+                        "region": extra.get("region", ""),
                     }
                 )
         return {
