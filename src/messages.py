@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import heapq
+import html
 import re
 import sqlite3
 import time
@@ -31,6 +32,7 @@ _VOICE_LEN = re.compile(r'voicelength="(\d+)"')
 _VIDEO_LEN = re.compile(r'playlength="(\d+)"')
 _TITLE_RE = re.compile(r"<title>(.*?)</title>", re.S)
 _DES_RE = re.compile(r"<des>(.*?)</des>", re.S)
+_CDATA_RE = re.compile(r"^\s*<!\[CDATA\[(.*?)\]\]>\s*$", re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _DEFAULT_WINDOW_DAYS = 30
@@ -116,14 +118,30 @@ def _ts_end(date: str) -> Optional[int]:
     return t + 86399 if t is not None else None
 
 
+def _clean(text: str) -> str:
+    """去 CDATA 包裹与 HTML 实体，只留可读文本。"""
+    if not text:
+        return ""
+    m = _CDATA_RE.match(text.strip())
+    if m:
+        text = m.group(1)
+    return html.unescape(text).strip()
+
+
+def _first_tag(text: str, tag: str) -> str:
+    m = re.search(rf"<{tag}>(.*?)</{tag}>", text or "", re.S)
+    return _clean(m.group(1)) if m else ""
+
+
 def _distill(text: str) -> str:
     """把 appmsg/引用类 XML 压成可读摘要，避免整段 XML 占响应体。"""
     if not text:
         return ""
-    parts = [p.strip() for p in _TITLE_RE.findall(text) + _DES_RE.findall(text) if p.strip()]
+    parts = [_clean(p) for p in _TITLE_RE.findall(text) + _DES_RE.findall(text)]
+    parts = [p for p in parts if p]
     if parts:
         return " / ".join(parts)[:300]
-    plain = _WS_RE.sub(" ", _TAG_RE.sub(" ", text)).strip()
+    plain = _WS_RE.sub(" ", html.unescape(_TAG_RE.sub(" ", text))).strip()
     return plain[:300]
 
 
@@ -143,6 +161,37 @@ def _media(src: LocalSource, text: str, type_name: str, subtype: Optional[str], 
             "path": "",
             "exists": False,
             "note": "本地未落盘或未命中 hardlink",
+        }
+    if subtype == "link":
+        url = _first_tag(text, "url")
+        return {
+            "kind": "link",
+            "url": url,
+            "title": _clean(next(iter(_TITLE_RE.findall(text or "")), "")),
+            "desc": _clean(next(iter(_DES_RE.findall(text or "")), "")),
+            "openable": bool(url),
+        }
+    if subtype == "transfer":
+        return {
+            "kind": "transfer",
+            "amount": _first_tag(text, "feedesc"),
+            "des": _clean(next(iter(_DES_RE.findall(text or "")), "")),
+            "pay_sub_type": _first_tag(text, "paysubtype"),
+        }
+    if subtype == "red_packet":
+        return {
+            "kind": "red_packet",
+            "url": _first_tag(text, "url"),
+            "amount": None,
+            "des": _clean(next(iter(_DES_RE.findall(text or "")), "")),
+            "note": "红包金额需拆开后才可见",
+        }
+    if subtype in ("mini_program", "channels", "app"):
+        return {
+            "kind": subtype,
+            "url": _first_tag(text, "url"),
+            "title": _clean(next(iter(_TITLE_RE.findall(text or "")), "")),
+            "openable": bool(_first_tag(text, "url")),
         }
     if type_name == "image":
         m = _IMG_MD5.search(text or "")
@@ -228,8 +277,8 @@ def _build_row(db: Path, table: str, r, sender_map: dict, my_user: str, contacts
 
 
 def _media_dummy(type_name: str, subtype: Optional[str]) -> Optional[dict]:
-    if subtype == "file":
-        return {"kind": "file"}
+    if subtype in ("file", "link", "transfer", "red_packet", "mini_program", "channels", "app"):
+        return {"kind": subtype}
     if type_name in ("image", "voice", "video", "emoticon"):
         return {"kind": type_name}
     return None
@@ -317,7 +366,7 @@ def list_messages(
     matched = 0
     heaps: dict[str, list] = {}
     db_cache: dict[str, tuple[dict, dict]] = {}
-    media_budget = {"image": 8, "voice": 8}
+    media_budget = {"voice": 8}
 
     for cid, cname, db, tbl in jobs:
         conn = connect_ro(db)
@@ -397,23 +446,45 @@ def list_messages(
     next_cursor = (
         f"{last_key[0]}|{last_key[1]}|{last_key[2]}|{last_key[3]}" if last_key else None
     )
+    images: list[dict] = []
     for row in page:
         if not row["chat_name"]:
             row["chat_name"] = name_by_id.get(row["chat_id"], row["chat_id"])
-        if row["media"] and row["media"].get("kind") == "file":
+        kind = (row["media"] or {}).get("kind")
+        if kind in ("file", "link", "transfer", "red_packet", "mini_program", "channels", "app"):
             row["media"] = _media(
                 src, row.get("_raw", ""), row["type"], row["subtype"], row["chat_id"]
             )
         if include_media and row.get("media"):
             from . import media_inline
 
-            media_inline.enrich(src, row, row.get("_raw", ""), media_budget)
+            kind = (row["media"] or {}).get("kind")
+            if kind == "voice":
+                if media_budget["voice"] > 0:
+                    media_budget["voice"] -= 1
+                    text = media_inline.voice_transcript(src, row)
+                    if text:
+                        row["voice_text"] = text
+            else:
+                data, source = media_inline.image_bytes_for(row, row.get("_raw", ""))
+                if data:
+                    media = dict(row["media"] or {})
+                    media.update({"source": source, "bytes": len(data)})
+                    row["media"] = media
+                    images.append(
+                        {
+                            "local_id": row["local_id"],
+                            "kind": kind,
+                            "source": source,
+                            "bytes": data,
+                        }
+                    )
         row.pop("_raw", None)
         row.pop("_db", None)
         row.pop("_tbl", None)
         row.pop("ts", None)
     has_more = matched > len(page)
-    return {
+    result = {
         "total": matched,
         "returned": len(page),
         "has_more": has_more,
@@ -423,6 +494,18 @@ def list_messages(
         "messages": page,
         "unresolved": unresolved,
     }
+    if images:
+        result["_images"] = images
+    hints = []
+    if any(isinstance(m.get("media"), dict) and m["media"].get("openable") for m in page):
+        hints.append("media.url 可直接在浏览器打开查看原文")
+    if any(isinstance(m.get("media"), dict) and m["media"].get("kind") == "transfer" for m in page):
+        hints.append("media.amount 为转账金额，直接取自消息里的应付金额字段")
+    if any(isinstance(m.get("media"), dict) and m["media"].get("kind") == "red_packet" for m in page):
+        hints.append("红包金额本地不存，需拆开后才可见")
+    if hints:
+        result["hints"] = hints
+    return result
 
 
 def _tables_of(db: Path) -> list[str]:

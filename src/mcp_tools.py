@@ -6,10 +6,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Optional
 
 AUTO_EXPORT_ROWS = 200
 AUTO_EXPORT_BYTES = 80000
+# 单次返回体上限：内联图片会让响应膨胀，超了宿主会直接断连接，需要重新 load。
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+# 图片原始字节预算：base64 传输膨胀约 4/3，6MB 原始字节约合 8MB 传输体积。
+INLINE_IMAGE_BUDGET = 6_000_000
 EXPORT_KEYS = ("messages", "entities", "items", "moments", "members", "groups", "by_day")
 
 
@@ -67,6 +72,70 @@ def _respond(
         }
         return _dumps(obj)
     return text
+
+
+def _save_images(obj: dict, images: list, src, target=None) -> int:
+    """把图片字节全部落盘，并把路径回填到对应消息的 media。返回落盘张数。"""
+    if not images:
+        return 0
+    from . import export, media_inline
+
+    out_dir = Path(target) if target else export.run_dir() / "media"
+    by_id = {m.get("local_id"): m for m in obj.get("messages") or []}
+    saved = 0
+    for img in images:
+        info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), out_dir)
+        m = by_id.get(img.get("local_id"))
+        if m is not None and isinstance(m.get("media"), dict):
+            m["media"]["path"] = info["path"]
+        saved += 1
+    return saved
+
+
+def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
+    """按体积预算内联图片。超预算的不内联，落盘后给路径。"""
+    from mcp.server.fastmcp.utilities.types import Image
+
+    from . import media_inline
+
+    by_id = {m.get("local_id"): m for m in obj.get("messages") or []}
+    blocks: list = []
+    used = 0
+    overflow: list = []
+    for img in images:
+        size = len(img["bytes"])
+        if used + size <= INLINE_IMAGE_BUDGET:
+            used += size
+            blocks.append(Image(data=img["bytes"], format="jpeg"))
+            m = by_id.get(img.get("local_id"))
+            if m is not None and isinstance(m.get("media"), dict):
+                m["media"]["inlined"] = True
+        else:
+            overflow.append(img)
+
+    if overflow:
+        from . import export
+
+        target = export.run_dir() / "media"
+        for img in overflow:
+            info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), target)
+            m = by_id.get(img.get("local_id"))
+            if m is not None and isinstance(m.get("media"), dict):
+                m["media"]["inlined"] = False
+                m["media"]["path"] = info["path"]
+
+    stats = {
+        "inlined": len(blocks),
+        "inlined_bytes": used,
+        "not_inlined": len(overflow),
+        "image_budget_bytes": INLINE_IMAGE_BUDGET,
+    }
+    if overflow:
+        stats["note"] = (
+            f"另有 {len(overflow)} 张图片因返回体体积上限未内联，"
+            "已保存为本地文件，media.path 可直接读取"
+        )
+    return blocks, stats
 
 
 def register(mcp, get_service) -> None:
@@ -132,7 +201,8 @@ def register(mcp, get_service) -> None:
         format: str = "csv",
         include_media: bool = False,
         output_dir: str = "",
-    ) -> str:
+        extract_media: str = "",
+    ) -> list:
         """读取聊天消息，默认返回最新的一批。
 
         Args:
@@ -147,7 +217,9 @@ def register(mcp, get_service) -> None:
             cursor: 上一页返回的 next_cursor
             output: inline 直接返回，file 强制落盘
             format: 落盘格式 csv/json/md/html
-            output_dir: 落盘目录，留空写本进程的 exports/run-* 目录
+            include_media: 图片、表情、视频封面直接内联返回，语音直接给转写文字
+            output_dir: 结果落盘目录，留空写本进程的 exports/run-* 目录
+            extract_media: 额外把媒体原文件存到文件；留空不存，auto 存到本进程导出目录，也可传绝对目录
         """
         svc = get_service()
         obj = svc.get_messages(
@@ -162,7 +234,32 @@ def register(mcp, get_service) -> None:
             cursor=cursor,
             include_media=include_media,
         )
-        return _respond(obj, "messages", ("messages",), output, format, output_dir)
+        images = obj.pop("_images", None) or []
+
+        if extract_media and images:
+            from . import export as export_mod
+
+            target = export_mod.run_dir() / "media" if extract_media == "auto" else Path(extract_media)
+            saved = _save_images(obj, images, svc.src, target)
+            obj["media_extract"] = {"saved": saved, "dir": str(target)}
+
+        if not images:
+            return _respond(obj, "messages", ("messages",), output, format, output_dir)
+
+        inline_text = _dumps(obj)
+        need_export = (
+            output == "file"
+            or len(inline_text) > AUTO_EXPORT_BYTES
+            or obj.get("returned", 0) >= AUTO_EXPORT_ROWS
+        )
+        if need_export:
+            saved = _save_images(obj, images, svc.src)
+            obj["media_inline"] = {"inlined": 0, "saved": saved, "reason": "结果已落盘，图片同时保存为文件"}
+            return _respond(obj, "messages", ("messages",), output, format, output_dir)
+
+        blocks, stats = _inline_images(obj, images, svc.src)
+        obj["media_inline"] = stats
+        return [_dumps(obj), *blocks]
 
     @mcp.tool()
     def relations(

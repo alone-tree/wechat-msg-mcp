@@ -194,6 +194,10 @@ def decrypt_v2_dat(data: bytes, aes_key_str: str, xor_key: Optional[int]) -> Opt
         return out
     if out[:4] in (b"\x89PNG", b"RIFF", b"GIF8"):
         return out
+    # 新版本微信把原图存成 wxgf 容器（HEVC 裸流），需解出首帧。
+    # 之前这里直接返回 None，导致 wxgf 格式的本地原图全部取不到。
+    if out[:4] == b"wxgf":
+        return decode_wxgf(out)
     return None
 
 

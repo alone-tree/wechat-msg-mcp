@@ -41,9 +41,11 @@ APPMSG_TYPES: dict[int, str] = {
     62: "channels",
     63: "channels",
     87: "app",
+    2000: "transfer",
+    2001: "red_packet",
 }
 
-_APPMSG_TYPE_RE = re.compile(r"<type>\s*(\d+)\s*</type>")
+_APPMSG_TYPE_RE = re.compile(r"<type>\s*(?:<!\[CDATA\[)?\s*(\d+)\s*(?:\]\]>)?\s*</type>")
 
 
 def split_local_type(local_type: int) -> tuple[int, int]:
