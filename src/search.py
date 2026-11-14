@@ -69,8 +69,12 @@ def search(
 
     if scope not in ("message", "entity", "all"):
         return {
-            "error": f"未知 scope: {scope}",
-            "valid": ["message", "entity", "all"],
+            "ok": False,
+            "error": {
+                "code": "unknown_scope",
+                "message": f"未知 scope: {scope}",
+                "candidates": ["message", "entity", "all"],
+            },
             "hint": "写错取值不会自动回退",
         }
     scope = scope if scope in ("message", "entity", "all") else "all"

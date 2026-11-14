@@ -152,6 +152,8 @@ def cmd_rel(args) -> int:
         until=args.until,
         limit=args.limit,
     )
+    if not obj.get("ok", True):
+        return _fail(obj)
     if args.json or args.pretty:
         _emit(obj, True, args.pretty)
         return 0
@@ -204,8 +206,10 @@ def cmd_resolve(args) -> int:
 
 
 def cmd_status(args) -> int:
-    _emit(_service(args).status(), True, True)
-    return 0
+    obj = _service(args).status()
+    # status 本身就是 JSON；不加 --json 时按缩进给，加了就紧凑
+    _emit(obj, True, args.pretty or not args.json)
+    return 0 if obj.get("ok", True) else 2
 
 
 def cmd_sync(args) -> int:
@@ -234,6 +238,8 @@ def cmd_moments(args) -> int:
     if args.json or args.pretty:
         _emit(obj, True, args.pretty)
         return 0
+    if not obj.get("ok", True):
+        return _fail(obj)
     print(
         f"total={obj['total']} returned={obj['returned']} has_more={obj['has_more']}"
         f" next={obj['next']} data_until={obj['data_until']}"
@@ -260,6 +266,8 @@ def cmd_favorites(args) -> int:
     if args.json or args.pretty:
         _emit(obj, True, args.pretty)
         return 0
+    if not obj.get("ok", True):
+        return _fail(obj)
     print(
         f"total={obj['total']} returned={obj['returned']} has_more={obj['has_more']}"
         f" next={obj['next']} data_until={obj['data_until']}"

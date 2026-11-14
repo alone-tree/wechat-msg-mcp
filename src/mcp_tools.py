@@ -12,7 +12,6 @@ from typing import Optional
 AUTO_EXPORT_ROWS = 200
 AUTO_EXPORT_BYTES = 80000
 # 单次返回体上限：内联图片会让响应膨胀，超了宿主会直接断连接，需要重新 load。
-MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 # 图片原始字节预算：base64 传输膨胀约 4/3，6MB 原始字节约合 8MB 传输体积。
 INLINE_IMAGE_BUDGET = 6_000_000
 EXPORT_KEYS = ("messages", "entities", "items", "moments", "members", "groups", "by_day")
@@ -156,7 +155,7 @@ def _save_images(obj: dict, images: list, src, target=None) -> int:
     from . import export, media_inline
 
     out_dir = Path(target) if target else export.run_dir() / "media"
-    by_id = {m.get("local_id"): m for m in obj.get("messages") or []}
+    by_id = {m.get("id", m.get("local_id")): m for m in obj.get("messages") or []}
     saved = 0
     for img in images:
         if img.get("kind") == "voice":
@@ -223,7 +222,7 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
 
     from . import media_inline
 
-    by_id = {m.get("local_id"): m for m in obj.get("messages") or []}
+    by_id = {m.get("id", m.get("local_id")): m for m in obj.get("messages") or []}
     blocks: list = []
     used = 0
     overflow: list = []
@@ -301,8 +300,12 @@ def register(mcp, get_service) -> None:
         if action not in ("start", "status", "sync"):
             return _dumps(
                 {
-                    "error": f"未知 action: {action}",
-                    "valid": ["start", "status", "sync"],
+                    "ok": False,
+                    "error": {
+                        "code": "unknown_action",
+                        "message": f"未知 action: {action}",
+                        "candidates": ["start", "status", "sync"],
+                    },
                     "hint": "写错动作不会自动回退到 start",
                 }
             )

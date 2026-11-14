@@ -122,7 +122,8 @@ class Service:
 
     # 同步与索引
     def status(self) -> dict:
-        info = sync_mod.status(self.src)
+        info = {"ok": True}
+        info.update(sync_mod.status(self.src))
         info["index"] = index.count(self.src)
         info["refresh"] = {
             "ttl_seconds": freshness.ttl_seconds(),
@@ -132,7 +133,17 @@ class Service:
         return info
 
     def refresh(self, force: bool = True) -> dict:
-        return freshness.ensure(self.src, force=force, update_index=True)
+        result = freshness.ensure(self.src, force=force, update_index=True)
+        if not isinstance(result, dict):
+            return {"ok": False, "error": {"code": "refresh_failed", "message": "刷新没有返回结果"}}
+        failed = result.get("skipped") in ("error", "no_source", "no_keys")
+        result["ok"] = not failed
+        if failed and result.get("error"):
+            result["error"] = {
+                "code": str(result.get("skipped") or "refresh_failed"),
+                "message": str(result["error"]),
+            }
+        return result
 
     def build_index(self, rebuild: bool = False) -> dict:
         return index.build(self.src, rebuild=rebuild)

@@ -419,6 +419,15 @@ def list_entities(
             "hint": "写错取值不会自动回退，避免静默返回一份看起来正常的结果",
         }
     detail = str(detail or "lite").lower()
+    if detail not in ("lite", "full"):
+        return {
+            "ok": False,
+            "error": {
+                "code": "bad_detail",
+                "message": f"未知详细度: {detail}",
+                "candidates": ["lite", "full"],
+            },
+        }
     contacts = load_contacts(src)
     gmeta = group_meta(src) if any(c["kind"] == "group" for c in contacts) else {}
     smeta = session_meta(src)

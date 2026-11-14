@@ -86,7 +86,13 @@ def list_moments(
 
     db = src.path("sns")
     if not db.exists():
-        return {"error": "sns.db 不存在", "moments": [], "total": 0, "data_until": src.data_until("sns")}
+        return {
+            "ok": False,
+            "error": {"code": "no_sns_db", "message": "sns.db 不存在"},
+            "moments": [],
+            "total": 0,
+            "data_until": src.data_until("sns"),
+        }
 
     names = {
         c["username"]: (c.get("remark") or c.get("nickname") or c["username"])
@@ -101,7 +107,8 @@ def list_moments(
             author_id = author
         else:
             return {
-                "error": "未找到该联系人",
+                "ok": False,
+                "error": {"code": "person_not_found", "message": "未找到该联系人", "candidates": cands},
                 "subject": author,
                 "candidates": hit.get("candidates", []),
                 "total": 0,

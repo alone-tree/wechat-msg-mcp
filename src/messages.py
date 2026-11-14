@@ -495,7 +495,7 @@ def _project(row: dict, detail: str, show_chat: bool) -> dict:
         return out
     out["sender_id"] = row.get("sender_id") or ""
     out["type"] = row["type"]
-    if row["type"] == "app" and row.get("subtype"):
+    if row.get("subtype"):
         out["subtype"] = row["subtype"]
     out["chat_id"] = row.get("chat_id") or ""
     out["chat_name"] = row.get("chat_name") or row.get("chat_id") or ""
@@ -578,7 +578,9 @@ def list_messages(
     if detail not in DETAILS:
         return _error("bad_detail", f"未知详细度: {detail}", candidates=list(DETAILS))
     limit = max(1, min(int(limit), 1000))
-    order = "asc" if str(order).lower() == "asc" else "desc"
+    order = str(order).lower()
+    if order not in ("desc", "asc"):
+        return _error("bad_order", f"未知排序方向: {order}", candidates=["desc", "asc"])
     lo, hi = _ts(start), _ts_end(end)
     default_window = 0
     if not targets and lo is None and hi is None:
@@ -606,6 +608,7 @@ def list_messages(
         return contacts.name_of(wxid) or ""
 
     unresolved: list[dict] = []
+    ambiguous: list[dict] = []
     jobs: list[tuple[Optional[str], Optional[str], Path, str]] = []
     if targets:
         for t in targets:
@@ -614,6 +617,17 @@ def list_messages(
                 unresolved.append({"input": t, "reason": "not_found", "candidates": []})
                 continue
             best = hit["candidates"][0]
+            if len(hit["candidates"]) > 1 and best.get("matched") != "exact":
+                ambiguous.append(
+                    {
+                        "input": t,
+                        "chosen": {"id": best["id"], "name": best.get("name", "")},
+                        "others": [
+                            {"id": c["id"], "name": c.get("name", "")}
+                            for c in hit["candidates"][1:4]
+                        ],
+                    }
+                )
             cid = best["id"]
             tables = resolve_tables(src, cid)
             if not tables:
@@ -638,7 +652,15 @@ def list_messages(
     per_cap = limit if per_target_limit <= 0 else max(1, min(limit, int(per_target_limit)))
     # 只有每会话上限比 limit 还小时才会真的丢数据，否则多出来的行下一页仍能取到
     trimming = bool(multi and targets and per_cap < limit)
-    cand_key = _cursor_key(cursor) if cursor else None
+    cand_key = None
+    if cursor:
+        cand_key = _cursor_key(cursor)
+        if cand_key is None:
+            return _error(
+                "bad_cursor",
+                "游标格式不对，应原样沿用上一页返回的 next",
+                candidates=[],
+            )
     matched = 0
     remaining = 0
     dropped: dict[str, int] = {}
@@ -843,6 +865,11 @@ def list_messages(
         )
     if unresolved:
         warnings.append("有目标名没解析到，见 unresolved；不要把它当成该会话没有消息")
+    if ambiguous:
+        result["ambiguous"] = ambiguous
+        warnings.append(
+            "有目标名命中多个候选，已取第一个；要精确指定的用 id，见 ambiguous"
+        )
     if include_media and len(page) > MEDIA_MAX_ROWS:
         warnings.append(
             f"本次返回 {len(page)} 条超过 {MEDIA_MAX_ROWS} 条，未提取媒体；"

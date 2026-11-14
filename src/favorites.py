@@ -99,7 +99,13 @@ def list_favorites(
 
     db = src.path("favorite")
     if not db.exists():
-        return {"error": "favorite.db 不存在", "items": [], "total": 0, "data_until": src.data_until("favorite")}
+        return {
+            "ok": False,
+            "error": {"code": "no_favorite_db", "message": "favorite.db 不存在"},
+            "items": [],
+            "total": 0,
+            "data_until": src.data_until("favorite"),
+        }
 
     names = {
         c["username"]: (c.get("remark") or c.get("nickname") or c["username"])
@@ -110,8 +116,12 @@ def list_favorites(
         want_type = int(type)
     if (type or "").strip() and not want_type:
         return {
-            "error": f"未知 type: {type}",
-            "valid": sorted(_NAME_TO_TYPE.keys()),
+            "ok": False,
+            "error": {
+                "code": "unknown_type",
+                "message": f"未知 type: {type}",
+                "candidates": sorted(_NAME_TO_TYPE.keys()),
+            },
             "hint": "写错类型不会自动返回全部，避免看起来像有结果",
         }
     lo, hi = _ts(since), _ts(until)

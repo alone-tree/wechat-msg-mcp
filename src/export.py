@@ -80,13 +80,16 @@ def cleanup(max_age_hours: float = RUN_RETENTION_HOURS) -> dict:
     return {"removed_files": removed_files, "removed_dirs": removed_dirs}
 
 
+_SUFFIX = {"text": "txt", "md": "md", "csv": "csv", "json": "json", "ndjson": "ndjson", "html": "html"}
+
+
 def _name(prefix: str, fmt: str, index: int = 0) -> str:
     """进程内自增序号保证同秒不撞名；目录本身按进程隔离，跨进程不会冲突。"""
     global _SEQ
     _SEQ += 1
     stamp = time.strftime("%Y%m%d-%H%M%S")
     part = f"-part{index}" if index else ""
-    return f"{prefix}-{stamp}{part}-{_SEQ:04d}.{fmt}"
+    return f"{prefix}-{stamp}{part}-{_SEQ:04d}.{_SUFFIX.get(fmt, fmt)}"
 
 
 def _cell(value) -> str:

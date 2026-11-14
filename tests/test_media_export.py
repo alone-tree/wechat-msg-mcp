@@ -1,5 +1,5 @@
-"""视频原件导出：有本地 mp4 时复制并改写路径。"""
-from src.mcp_tools import _export_videos
+"""媒体落盘与视频原件导出：写回的键必须与投影后的行对上。"""
+from src.mcp_tools import _export_videos, _save_images
 
 
 def _obj(path):
@@ -32,3 +32,22 @@ def test_export_video_skips_other_kinds(tmp_path):
     obj = {"messages": [{"media": {"kind": "image", "path": "x.jpg", "exists": True}}]}
     result = _export_videos(obj, tmp_path / "export")
     assert result == {"exported": 0, "skipped": 0, "dir": str(tmp_path / "export")}
+
+
+def test_save_images_writes_back_path_on_projected_rows(tmp_path):
+    """投影后行键是 id（不是 local_id），落盘路径必须还能写回 media。"""
+    obj = {"messages": [{"id": 7, "text": "[图片]", "media": {"kind": "image"}}]}
+    images = [{"local_id": 7, "kind": "image", "source": "dat", "bytes": b"\xff\xd8fakejpeg"}]
+    saved = _save_images(obj, images, None, tmp_path / "media")
+    assert saved == 1
+    assert obj["messages"][0]["media"]["path"].endswith(".jpg")
+    assert (tmp_path / "media").exists()
+
+
+def test_save_images_writes_back_cover_path_for_video(tmp_path):
+    obj = {"messages": [{"id": 9, "text": "[视频 8 秒]", "media": {"kind": "video", "path": "a.mp4"}}]}
+    images = [{"local_id": 9, "kind": "video", "source": "cover", "bytes": b"\xff\xd8cover"}]
+    _save_images(obj, images, None, tmp_path / "media")
+    media = obj["messages"][0]["media"]
+    assert media["cover_path"].endswith(".jpg")
+    assert media["path"] == "a.mp4"

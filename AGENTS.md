@@ -139,7 +139,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 102 项）
+├── tests/                      单元测试（共 104 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -194,4 +194,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；102 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。
+重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；104 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。

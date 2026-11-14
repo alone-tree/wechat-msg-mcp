@@ -50,7 +50,8 @@ def _fail(src: LocalSource, subject: str, message: str, kind: str, candidates: l
 
     cands = candidates if candidates is not None else resolve_name(src, subject, limit=5).get("candidates", [])
     return {
-        "error": message,
+        "ok": False,
+        "error": {"code": "subject_not_found", "message": message, "candidates": cands},
         "kind": kind,
         "subject": subject,
         "unresolved": [
@@ -199,7 +200,11 @@ def person_activity(
     lo, hi = _ts(since), _ts_end(until)
     idx = index.count(src)
     if not idx.get("exists"):
-        return {"error": "索引尚未构建，先运行 wechatq index", "data_until": src.data_until("message")}
+        return {
+            "ok": False,
+            "error": {"code": "index_missing", "message": "索引尚未构建，先运行 python -m src.cli index"},
+            "data_until": src.data_until("message"),
+        }
     iconn = sqlite3.connect(f"file:{index.index_path(src).as_posix()}?mode=ro", uri=True)
     try:
         where = ["sender_id = ?"]
@@ -217,10 +222,19 @@ def person_activity(
                 hit = _resolve(src, t)
                 if hit:
                     resolved.append(hit["id"])
-            if resolved:
-                where.append("chat_id IN (%s)" % ",".join("?" * len(resolved)))
-                args.extend(resolved)
-                chat_filter = resolved
+            if not resolved:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "targets_unresolved",
+                        "message": "targets 里的会话一个都没解析到，不会退化成全部群",
+                        "candidates": targets,
+                    },
+                    "data_until": src.data_until("message"),
+                }
+            where.append("chat_id IN (%s)" % ",".join("?" * len(resolved)))
+            args.extend(resolved)
+            chat_filter = resolved
         sql = (
             "SELECT chat_id, COUNT(*) AS n, MAX(ts) AS last FROM msg_meta WHERE "
             + " AND ".join(where)
@@ -265,7 +279,12 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
     cid = target["id"]
     tables = resolve_tables(src, cid)
     if not tables:
-        return {"error": "没有消息分表", "subject": subject, "data_until": src.data_until("message")}
+        return {
+            "ok": False,
+            "error": {"code": "no_message_table", "message": "没有消息分表"},
+            "subject": subject,
+            "data_until": src.data_until("message"),
+        }
     lo, hi = _ts(since), _ts_end(until)
     from .entities import load_contacts
 
