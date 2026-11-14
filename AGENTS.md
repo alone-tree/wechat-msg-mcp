@@ -54,7 +54,7 @@
 | docs/索引.md | 文档总索引，每个文件的职责与不写什么 | 是 |
 | docs/AI使用指南.md | 给接手的 AI 看的完整说明书：工具速查、媒体读法、编排范例、任务配方、坑 | 是 |
 | docs/总体设计.md | 当前实现的数据流、模块职责、数据可得性、性能边界 | 是 |
-| docs/任务清单.md | 唯一任务表 T01 至 T20，含优先级、阶段、状态 | 是 |
+| docs/任务清单.md | 唯一任务表 T01 至 T22，含优先级、阶段、状态 | 是 |
 | docs/开发日志.md | 按日期的变更、原因、验证与提交号 | 是 |
 | docs/交接.md | 当前进度、已定接口与下一步 | 是 |
 | docs/重构方案-2026-11-13.md | 设计与阶段验收，已实施至阶段 10 | 是 |
@@ -76,7 +76,7 @@ wechat-msg-mcp/
 ├── docs/
 │   ├── 索引.md                 文档总索引
 │   ├── 总体设计.md             现状：数据流、模块、数据可得性
-│   ├── 任务清单.md             T01 至 T20
+│   ├── 任务清单.md             T01 至 T22
 │   ├── 开发日志.md             按日期记录
 │   ├── 重构方案-2026-11-13.md  设计与阶段验收
 │   ├── 业务场景与程序不匹配.md 业务复盘原始清单
@@ -84,9 +84,9 @@ wechat-msg-mcp/
 │   └── 交接.md                 当前进度与下一步
 ├── src/
 │   ├── __init__.py
-│   ├── server.py               MCP 入口（薄壳，8 个工具）
-│   ├── guide.py               使用说明书（instructions 与 start 工具共用）
-│   ├── mcp_tools.py            八个 MCP 工具的参数与 JSON 包装
+│   ├── server.py               MCP 入口（薄壳，7 个工具）
+│   ├── guide.py               使用说明书（instructions 与 system 工具共用）
+│   ├── mcp_tools.py            七个 MCP 工具的参数与 JSON 包装
 │   ├── service.py              service 门面，MCP 与 CLI 共用
 │   ├── config.py               路径、密钥、解密目录、账号 wxid、微信目录探测
 │   ├── decrypt.py              页级解密、增量刷新、原子替换
@@ -149,7 +149,7 @@ wechat-msg-mcp/
 | 项 | 值 |
 |---|---|
 | 服务端口 | 18907，仅 -Serve 时启用；默认 stdio 由客户端拉起 |
-| 启动方式 | mcp_load 自动拉起，实测约 1 秒，无需预热；也有 start 工具给任意客户端拿说明书 |
+| 启动方式 | mcp_load 自动拉起，实测约 1 秒，无需预热；也有 system(action=start) 给任意客户端拿说明书 |
 | 刷新机制 | 查询前按 TTL（默认 60 秒）增量刷新，失败降级不阻断 |
 | 导出 | 每进程写 exports/run-<pid>-<时间>/，12 小时自动清理；AI 可用 output_dir 指定目录，指定目录不清理 |
 | 媒体内联 | include_media=true 时图片、表情、视频封面以图片内容直接返回，语音给转写文字；内联预算 6MB，超出部分落盘给路径 |
@@ -168,10 +168,10 @@ wechat-msg-mcp/
 |---|---|
 | 启动服务 | mcp_load（stdio 自动拉起）；要常驻 HTTP 则 start.ps1 -Serve |
 | 刷新解密 | uv run python scripts\quick_decrypt.py（增量加 --full 全量） |
-| 强制刷新 | wechatq sync 或 MCP sync(action="sync") |
+| 强制刷新 | wechatq sync 或 MCP system(action="sync") |
 | 全量重解（需管理员与微信运行） | uv run python scripts\decrypt_standalone.py |
 | 检查服务端口 | Get-NetTCPConnection -LocalPort 18907 -State Listen |
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10：八个 MCP 工具（start、list_entities、get_messages、relations、search、sync、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；45 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；新增 start 入口工具提供平台无关的说明书。
+重构已完成阶段 1 到 10：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用；联系人新增地区与性别；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；45 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护；system 工具用 start/status/sync 三个动作提供平台无关的入口。

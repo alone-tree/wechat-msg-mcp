@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -Serve
 ```powershell
 uv run python scripts\quick_decrypt.py          # 增量，只解变化过的库
 uv run python scripts\quick_decrypt.py --full   # 全量重解，约 10 秒
-uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 sync 同源
+uv run python -m src.cli sync                   # 解密加索引，与 MCP system(action=sync) 同源
 ```
 
 ## 二、数据新鲜度
@@ -37,7 +37,7 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 | 刷新间隔 | 60 秒 | 环境变量 WECHAT_REFRESH_TTL 调整；设 0 则每次查询都刷；设负数关闭自动刷新 |
 | 增量范围 | mtime 比副本新的库 | 日常几个库约 0.5 到 2.5 秒；全量 32 库约 10 秒 |
 | 失败处理 | 降级不阻断 | 刷新出错照常返回现有数据，原因写在 refresh 字段 |
-| 强制刷新 | sync(action="sync") | 或 CLI 加 --fresh |
+| 强制刷新 | system(action="sync") | 或 CLI 加 --fresh |
 
 返回里的 refresh 字段说明本次做了什么：
 
@@ -57,11 +57,17 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 
 ## 三、MCP 工具
 
-八个工具：start、list_entities、get_messages、relations、search、sync、list_moments、list_favorites。查询类工具返回 data_cutoff（该数据源最后写入时间）与 refresh（本次刷新情况）。
+七个工具：system、list_entities、get_messages、relations、search、list_moments、list_favorites。查询类工具返回 data_cutoff（该数据源最后写入时间）与 refresh（本次刷新情况）。
 
-### start
+### system
 
-入口工具，新会话先调它。返回完整使用说明（guide 字段）与当前数据状态（state、data_cutoff、库数、联系人、群、索引行数）。
+系统入口，三种固定动作，新会话先调 action=start。
+
+| action | 作用 |
+|---|---|
+| start（默认） | 返回完整使用说明（guide 字段）与当前数据状态 |
+| status | 只看数据新鲜度 |
+| sync | 立即增量刷新解密数据与索引，force 控制是否忽略 TTL |
 
 平台无关：任何 MCP 客户端都能调，不依赖特定宿主的引导能力。换平台时只要客户端支持 MCP，这个工具就能告诉你该怎么用。
 
@@ -144,9 +150,6 @@ inline 模式下若返回超过 80 KB 或 200 条，会自动落盘并在 auto_e
 
 一次搜实体与消息：scope=all/entity/message，消息带命中片段，实体区分命中字段（备注、昵称、微信号、群名）。消息结果带 total、has_more、next_offset，类型统一为字符串；用 offset 配合 next_offset 翻页。
 
-### sync
-
-action=status 返回数据截止时间、库文件 mtime、联系人、群、索引行数，以及 TTL 剩余；action=sync 立即刷新解密数据与索引，force 默认 true。其余查询工具已自动刷新，这个工具用于显式要求立刻拉最新。
 
 ### list_moments
 
