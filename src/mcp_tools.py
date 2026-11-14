@@ -44,6 +44,7 @@ def _respond(
     output: str = "inline",
     fmt: str = "json",
     out_dir: str = "",
+    kind: str = "rows",
 ) -> str:
     """统一返回：output=file 强制落盘；inline 超阈值自动落盘并只留预览。
 
@@ -53,11 +54,14 @@ def _respond(
     from . import export
 
     def do_export() -> dict:
-        return export.write_rows(_pick_rows(obj, keys), fmt=fmt, out_dir=out_dir, prefix=name)
+        return export.write_rows(
+            _pick_rows(obj, keys), fmt=fmt, out_dir=out_dir, prefix=name, kind=kind, envelope=obj
+        )
 
     if output == "file":
         exported = do_export()
         _trim_preview(obj, keys)
+        exported["is_partial"] = bool(obj.get("has_more"))
         obj["export"] = exported
         return _dumps(obj)
 
@@ -68,6 +72,7 @@ def _respond(
         _trim_preview(obj, keys)
         obj["auto_export"] = {
             **exported,
+            "is_partial": bool(obj.get("has_more")),
             "reason": "返回体过大，已自动落盘，仅保留前 3 条预览",
         }
         return _dumps(obj)
@@ -109,6 +114,11 @@ def _export_files(obj: dict, target) -> dict:
     return {"exported": done, "skipped": skipped, "dir": str(target), "bytes": total}
 
 
+def _path_key(kind: str) -> str:
+    """媒体本地路径挂在哪个键上：视频的 mp4 才是主件，封面单独一个键。"""
+    return "cover_path" if kind == "video" else "path"
+
+
 def _export_videos(obj: dict, target) -> dict:
     """把视频原始文件复制到导出目录（仅 extract_media 时用）。"""
     from . import media_files
@@ -118,20 +128,21 @@ def _export_videos(obj: dict, target) -> dict:
         media = m.get("media")
         if not isinstance(media, dict) or media.get("kind") != "video":
             continue
-        vp = media.get("video_path")
-        if not vp:
+        path = media.get("path")
+        if not path or not media.get("exists"):
+            skipped += 1
             continue
         info = {
             "kind": "video",
-            "name": Path(vp).name,
-            "size": int(media.get("video_size") or 0),
-            "path": vp,
+            "name": Path(path).name,
+            "size": int(media.get("size") or 0),
+            "path": path,
             "exists": True,
         }
         new = media_files.export_copy(info, Path(target), FILE_EXPORT_MAX_BYTES)
         if new is not None and new.get("exported"):
-            media["video_source_path"] = vp
-            media["video_path"] = new["path"]
+            media["source_path"] = new.get("source_path", "")
+            media["path"] = new["path"]
             done += 1
         else:
             skipped += 1
@@ -154,7 +165,7 @@ def _save_images(obj: dict, images: list, src, target=None) -> int:
             info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), out_dir)
         m = by_id.get(img.get("local_id"))
         if m is not None and isinstance(m.get("media"), dict):
-            m["media"]["path"] = info["path"]
+            m["media"][_path_key(img.get("kind") or "image")] = info["path"]
         saved += 1
     return saved
 
@@ -236,7 +247,7 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
                         src, img["bytes"], "full", export.run_dir() / "media"
                     )
                     m["media"]["tiles"] = len(tiles)
-                    m["media"]["path"] = info["path"]
+                    m["media"][_path_key(img.get("kind") or "image")] = info["path"]
                     m["media"]["note"] = (
                         f"长截图已切成 {len(tiles)} 段按顺序返回，相邻两段有约 80 像素重叠，"
                         "重复的一两行属正常；整图另存 media.path 便于核对"
@@ -253,7 +264,7 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
             m = by_id.get(img.get("local_id"))
             if m is not None and isinstance(m.get("media"), dict):
                 m["media"]["inlined"] = False
-                m["media"]["path"] = info["path"]
+                m["media"][_path_key(img.get("kind") or "image")] = info["path"]
 
     stats = {
         "inlined": len(blocks),
@@ -268,6 +279,10 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
         )
     return blocks, stats
 
+
+def _export_messages_full(svc, kwargs: dict, out_dir: str, fmt: str) -> dict:
+    """output=file：翻页取满再落盘，实现见 Service.export_messages。"""
+    return svc.export_messages(out_dir=out_dir, fmt=fmt, **kwargs)
 
 def register(mcp, get_service) -> None:
     @mcp.tool()
@@ -311,7 +326,7 @@ def register(mcp, get_service) -> None:
                 "guide": GUIDE,
                 "status": {
                     "state": st.get("state"),
-                    "data_cutoff": st.get("data_cutoff"),
+                    "data_until": st.get("data_until"),
                     "message_dbs": st.get("message_dbs"),
                     "contacts": st.get("contacts"),
                     "groups": st.get("groups"),
@@ -337,6 +352,7 @@ def register(mcp, get_service) -> None:
         output: str = "inline",
         output_dir: str = "",
         format: str = "json",
+        detail: str = "lite",
     ) -> str:
         """列出会话、联系人或群，带元信息与筛选。
 
@@ -354,6 +370,7 @@ def register(mcp, get_service) -> None:
             output: inline 直接返回，file 强制落盘
             output_dir: 落盘目录，留空写本进程的 exports/run-* 目录
             format: 落盘格式 json/csv/md/html
+            detail: lite 只给常用字段（默认）；full 追加地区、性别、说明、群公告等
         """
         obj = get_service().list_entities(
             scope=scope,
@@ -366,6 +383,7 @@ def register(mcp, get_service) -> None:
             sort=sort,
             limit=limit,
             offset=offset,
+            detail=detail,
         )
         return _respond(obj, "entities", ("entities",), output, format, output_dir)
 
@@ -380,6 +398,8 @@ def register(mcp, get_service) -> None:
         order: str = "desc",
         limit: int = 200,
         cursor: str = "",
+        detail: str = "lite",
+        per_target_limit: int = 0,
         output: str = "inline",
         format: str = "csv",
         include_media: bool = True,
@@ -393,23 +413,29 @@ def register(mcp, get_service) -> None:
             sender: 发言人，支持 wxid、备注或昵称
             start_date: 开始日期 YYYY-MM-DD
             end_date: 结束日期 YYYY-MM-DD
-            types: 类型过滤，可选 text/image/voice/video/emoticon/file/link/mini_program/quote/system
+            types: 类型过滤，可选 text/image/voice/video/emoticon/file/link/mini_program/
+                quote/chat_record/channels/transfer/red_packet/location/card/voip/system
             keyword: 正文关键词
             order: desc 最新优先（默认）或 asc
             limit: 返回条数上限，最多 1000
-            cursor: 上一页返回的 next_cursor
-            output: inline 直接返回，file 强制落盘
-            format: 落盘格式 csv/json/md/html
+            cursor: 上一页返回的 next
+            detail: lite 只给 id/time/from/text/media（默认）；full 追加
+                sender_id/type/chat_id/chat_name/senders；raw 追加 local_type 与原文
+            per_target_limit: 多会话查询时每个会话最多取多少条，0 表示不单独限制；
+                截断会在 warnings 里点名
+            output: inline 直接返回，file 翻页取满后落盘
+            format: 落盘格式 csv/json/ndjson/md/text/html
             include_media: 默认开。图片、表情、视频封面直接内联返回，语音给转写文字；
                 返回条数超过 50 条时自动跳过媒体提取（那种量级会被截成预览）
             output_dir: 结果落盘目录，留空写本进程的 exports/run-* 目录
             extract_media: 额外把媒体原文件存到文件；留空不存，auto 存到本进程导出目录，也可传绝对目录
 
-        媒体处理会比纯文本查询慢：需要看图时再用 include_media，并尽量配合 types
+        消息不带收发方向：from 为「我」就是本人发的，系统消息 from 为空。
+        媒体处理会比纯文本查询慢：要看图时再用 include_media，并尽量配合 types
         缩小范围（例如 types=["image"]），不要在一次大批量取数里同时开它。
         """
         svc = get_service()
-        obj = svc.get_messages(
+        kwargs = dict(
             targets=targets,
             sender=sender,
             start=start_date,
@@ -419,43 +445,49 @@ def register(mcp, get_service) -> None:
             order=order,
             limit=limit,
             cursor=cursor,
+            per_target_limit=per_target_limit,
             include_media=include_media,
+            detail=detail,
         )
+        obj = svc.get_messages(**kwargs)
+        if not obj.get("ok", True):
+            return _dumps(obj)
+        images = obj.pop("_images", None) or []
+
+        if output == "file":
+            exported = _export_messages_full(svc, kwargs, output_dir, format)
+            _trim_preview(obj, ("messages",), 3)
+            obj["export"] = exported
+            obj.setdefault("warnings", []).append(
+                "output=file 只导出文本；要看图请单独查并传 include_media 或 extract_media"
+            )
+            return _dumps(obj)
+
         from . import export as export_mod
 
         files = _export_files(obj, export_mod.run_dir() / "files")
         if files["exported"] or files["skipped"]:
             obj["file_export"] = files
-        images = obj.pop("_images", None) or []
 
         if extract_media and images:
-            from . import export as export_mod
-
             target = export_mod.run_dir() / "media" if extract_media == "auto" else Path(extract_media) / "media"
             saved = _save_images(obj, images, svc.src, target)
             obj["media_extract"] = {"saved": saved, "dir": str(target)}
-
         if extract_media:
-            from . import export as export_mod
-
             vtarget = export_mod.run_dir() / "video" if extract_media == "auto" else Path(extract_media) / "video"
             vres = _export_videos(obj, vtarget)
             if vres["exported"] or vres["skipped"]:
                 obj.setdefault("media_extract", {})["video"] = vres
 
         if not images:
-            return _respond(obj, "messages", ("messages",), output, format, output_dir)
+            return _respond(obj, "messages", ("messages",), output, format, output_dir, kind="messages")
 
         inline_text = _dumps(obj)
-        need_export = (
-            output == "file"
-            or len(inline_text) > AUTO_EXPORT_BYTES
-            or obj.get("returned", 0) >= AUTO_EXPORT_ROWS
-        )
+        need_export = len(inline_text) > AUTO_EXPORT_BYTES or obj.get("returned", 0) >= AUTO_EXPORT_ROWS
         if need_export:
             saved = _save_images(obj, images, svc.src)
             obj["media_inline"] = {"inlined": 0, "saved": saved, "reason": "结果已落盘，图片同时保存为文件"}
-            return _respond(obj, "messages", ("messages",), output, format, output_dir)
+            return _respond(obj, "messages", ("messages",), output, format, output_dir, kind="messages")
 
         blocks, stats = _inline_images(obj, images, svc.src)
         obj["media_inline"] = stats
@@ -523,7 +555,7 @@ def register(mcp, get_service) -> None:
             since_date: 消息时间下界 YYYY-MM-DD
             until_date: 消息时间上界 YYYY-MM-DD
             limit: 每组结果上限
-            offset: 消息结果偏移，配合 next_offset 翻页
+            offset: 消息结果偏移，配合 next 翻页
             output: inline 直接返回，file 强制落盘
             output_dir: 落盘目录，留空写本进程的 exports/run-* 目录
             format: 落盘格式 json/csv/md/html

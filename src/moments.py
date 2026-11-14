@@ -86,7 +86,7 @@ def list_moments(
 
     db = src.path("sns")
     if not db.exists():
-        return {"error": "sns.db 不存在", "moments": [], "total": 0, "data_cutoff": src.data_cutoff("sns")}
+        return {"error": "sns.db 不存在", "moments": [], "total": 0, "data_until": src.data_until("sns")}
 
     names = {
         c["username"]: (c.get("remark") or c.get("nickname") or c["username"])
@@ -105,7 +105,7 @@ def list_moments(
                 "subject": author,
                 "candidates": hit.get("candidates", []),
                 "total": 0,
-                "data_cutoff": src.data_cutoff("sns"),
+                "data_until": src.data_until("sns"),
             }
 
     lo, hi = _ts(since), _ts(until)
@@ -153,10 +153,12 @@ def list_moments(
     for m in page:
         m.pop("ts", None)
     return {
+        "ok": True,
         "total": total,
         "returned": len(page),
         "has_more": offset + len(page) < total,
-        "data_cutoff": src.data_cutoff("sns"),
+        "next": offset + len(page) if offset + len(page) < total else None,
+        "data_until": src.data_until("sns"),
         "moments": page,
     }
 

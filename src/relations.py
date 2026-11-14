@@ -61,7 +61,7 @@ def _fail(src: LocalSource, subject: str, message: str, kind: str, candidates: l
             }
         ],
         "total": 0,
-        "data_cutoff": src.data_cutoff("message"),
+        "data_until": src.data_until("message"),
     }
 
 
@@ -110,13 +110,15 @@ def group_members(src: LocalSource, subject: str, limit: int = 500) -> dict:
                     }
                 )
         return {
+            "ok": True,
             "kind": "group_members",
             "group": {"id": gid, "name": row["remark"] or row["nick_name"] or gid, "owner_id": owner},
             "total": total,
             "returned": len(members),
             "has_more": total > len(members),
+            "next": None,
             "members": members,
-            "data_cutoff": src.data_cutoff("message"),
+            "data_until": src.data_until("message"),
         }
     finally:
         conn.close()
@@ -165,14 +167,16 @@ def common_groups(src: LocalSource, subject: str, limit: int = 200) -> dict:
         ]
         groups.sort(key=lambda g: g["messages"], reverse=True)
         return {
+            "ok": True,
             "kind": "common_groups",
             "person": {"id": person_id, "name": target.get("name", "")},
             "total": len(groups),
             "returned": len(groups[:limit]),
             "has_more": len(groups) > limit,
+            "next": None,
             "groups": groups[:limit],
             "basis": "文本消息计数，来自本地索引",
-            "data_cutoff": src.data_cutoff("message"),
+            "data_until": src.data_until("message"),
         }
     finally:
         conn.close()
@@ -195,7 +199,7 @@ def person_activity(
     lo, hi = _ts(since), _ts_end(until)
     idx = index.count(src)
     if not idx.get("exists"):
-        return {"error": "索引尚未构建，先运行 wechatq index", "data_cutoff": src.data_cutoff("message")}
+        return {"error": "索引尚未构建，先运行 wechatq index", "data_until": src.data_until("message")}
     iconn = sqlite3.connect(f"file:{index.index_path(src).as_posix()}?mode=ro", uri=True)
     try:
         where = ["sender_id = ?"]
@@ -234,6 +238,7 @@ def person_activity(
     groups = [{"id": cid, "name": names.get(cid, cid), "messages": n, "last_at": _fmt(last)} for cid, n, last in rows]
     page = groups[:limit]
     return {
+        "ok": True,
         "kind": "person_activity",
         "person": {"id": pid, "name": target.get("name", "")},
         "scope": {"targets": chat_filter or "all_groups"},
@@ -241,9 +246,10 @@ def person_activity(
         "messages_total": sum(g["messages"] for g in groups),
         "returned": len(page),
         "has_more": len(groups) > len(page),
+        "next": None,
         "groups": page,
         "basis": "文本消息计数，来自本地索引",
-        "data_cutoff": src.data_cutoff("message"),
+        "data_until": src.data_until("message"),
     }
 
 
@@ -259,7 +265,7 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
     cid = target["id"]
     tables = resolve_tables(src, cid)
     if not tables:
-        return {"error": "没有消息分表", "subject": subject, "data_cutoff": src.data_cutoff("message")}
+        return {"error": "没有消息分表", "subject": subject, "data_until": src.data_until("message")}
     lo, hi = _ts(since), _ts_end(until)
     from .entities import load_contacts
 
@@ -308,6 +314,7 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
     top = sorted(senders.items(), key=lambda x: x[1], reverse=True)[:10]
     days = sorted(by_day.items())
     return {
+        "ok": True,
         "kind": "activity",
         "chat": {"id": cid, "name": target.get("name", "")},
         "total": total,
@@ -316,5 +323,5 @@ def activity(src: LocalSource, subject: str, since: str = "", until: str = "") -
         "by_type": dict(sorted(by_type.items(), key=lambda x: x[1], reverse=True)),
         "top_senders": [{"name": n, "messages": c} for n, c in top],
         "basis": "精确扫描源库",
-        "data_cutoff": src.data_cutoff("message"),
+        "data_until": src.data_until("message"),
     }

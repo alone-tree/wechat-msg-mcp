@@ -1,13 +1,16 @@
 """实体查询：会话、联系人、群。
 
 统一的人与群模型，字段来源见 docs/重构方案-2026-11-13.md 第 5 节。
-本模块只做查询，不写任何文件。
+群名兜底见 docs/重构方案-消息模型与输出规范-2026-11-14.md 第 4 节：
+备注 > 群昵称 > 成员昵称拼接 > 「群聊」，用 name_source 标明名字来源。
+本模块只做查询，不写任何文件；联系人、群与会话元信息按库文件时间缓存。
 """
 from __future__ import annotations
 
 import difflib
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import zstandard as zstd
@@ -16,6 +19,20 @@ from .db.locator import LocalSource
 from .db.open_ import connect_ro, table_exists
 
 _ZSTD = zstd.ZstdDecompressor()
+
+# 按 (文件路径, mtime, size) 缓存：解密库一更新就自动失效
+_CACHE: dict[tuple, object] = {}
+_NAME_CACHE: dict[tuple, dict] = {}
+_DIGEST_HEAD = 3
+_DIGEST_KEEP = 6
+
+
+def _cache_key(path: Path) -> tuple:
+    try:
+        st = path.stat()
+        return (str(path), st.st_mtime, st.st_size)
+    except OSError:
+        return (str(path), 0.0, 0)
 
 
 def _fmt(ts: Optional[int]) -> str:
@@ -45,6 +62,10 @@ def load_contacts(src: LocalSource) -> list[dict]:
     db = src.path("contact")
     if not db.exists():
         return []
+    key = ("contacts",) + _cache_key(db)
+    cached = _CACHE.get(key)
+    if isinstance(cached, list):
+        return cached
     conn = connect_ro(db)
     try:
         if not table_exists(conn, "contact"):
@@ -81,6 +102,7 @@ def load_contacts(src: LocalSource) -> list[dict]:
                     "add_time": extra.get("add_time", ""),
                 }
             )
+        _CACHE[key] = out
         return out
     finally:
         conn.close()
@@ -177,9 +199,13 @@ def _extra_fields(blob) -> dict:
 def group_meta(src: LocalSource) -> dict[str, dict]:
     """群维度补充：成员数、群主、群公告。"""
     db = src.path("contact")
-    meta: dict[str, dict] = {}
     if not db.exists():
-        return meta
+        return {}
+    key = ("group_meta",) + _cache_key(db)
+    cached = _CACHE.get(key)
+    if isinstance(cached, dict):
+        return cached
+    meta: dict[str, dict] = {}
     conn = connect_ro(db)
     try:
         if table_exists(conn, "chatroom_member"):
@@ -211,6 +237,7 @@ def group_meta(src: LocalSource) -> dict[str, dict]:
                 username = r["username_"]
                 if username:
                     meta.setdefault(username, {})["notice"] = _text(r["announcement_"])
+        _CACHE[key] = meta
         return meta
     finally:
         conn.close()
@@ -219,13 +246,17 @@ def group_meta(src: LocalSource) -> dict[str, dict]:
 def session_meta(src: LocalSource) -> dict[str, dict]:
     """会话表：最后消息时间、未读、摘要。"""
     db = src.path("session")
-    meta: dict[str, dict] = {}
     if not db.exists():
-        return meta
+        return {}
+    key = ("session_meta",) + _cache_key(db)
+    cached = _CACHE.get(key)
+    if isinstance(cached, dict):
+        return cached
+    meta: dict[str, dict] = {}
     conn = connect_ro(db)
     try:
         if not table_exists(conn, "SessionTable"):
-            return meta
+            return {}
         for r in conn.execute(
             "SELECT username, sort_timestamp, unread_count, summary FROM SessionTable"
         ):
@@ -237,19 +268,113 @@ def session_meta(src: LocalSource) -> dict[str, dict]:
                 "unread": r["unread_count"] or 0,
                 "last_message": _text(r["summary"])[:100],
             }
+        _CACHE[key] = meta
         return meta
     finally:
         conn.close()
 
 
-def _entity(row: dict, gmeta: dict, smeta: dict) -> dict:
+def _own_wxid(src: LocalSource) -> str:
+    try:
+        from .config import get_account_wxid
+
+        return get_account_wxid()
+    except Exception:
+        return ""
+
+
+def group_digest(src: LocalSource, room_ids: list[int], contacts: list[dict], my_user: str) -> dict[int, list[str]]:
+    """群 id -> 成员昵称（按成员表顺序，去掉自己）。只算传入的群，代价可控。"""
+    if not room_ids:
+        return {}
+    db = src.path("contact")
+    if not db.exists():
+        return {}
+    id_to_user = {int(c["id"]): c["username"] for c in contacts if c.get("id")}
+    user_to_name = {c["username"]: (c.get("remark") or c.get("nickname") or "") for c in contacts}
+    out: dict[int, list[str]] = {}
+    conn = connect_ro(db)
+    try:
+        if not table_exists(conn, "chatroom_member"):
+            return {}
+        for room_id in room_ids:
+            names = []
+            for (member_id,) in conn.execute(
+                "SELECT member_id FROM chatroom_member WHERE room_id = ?", (room_id,)
+            ):
+                username = id_to_user.get(int(member_id or 0), "")
+                if not username or (my_user and username == my_user):
+                    continue
+                name = user_to_name.get(username) or ""
+                if name and name not in names:
+                    names.append(name)
+            out[room_id] = names
+        return out
+    finally:
+        conn.close()
+
+
+def display_names(src: LocalSource, contacts: Optional[list[dict]] = None) -> dict[str, dict]:
+    """会话 id -> 显示名与来源。群名缺失时用成员昵称拼，与客户端显示效果一致。"""
+    db = src.path("contact")
+    key = ("names",) + _cache_key(db)
+    cached = _NAME_CACHE.get(key)
+    if isinstance(cached, dict):
+        return cached
+    rows = contacts if contacts is not None else load_contacts(src)
+    gmeta = group_meta(src)
+    my_user = _own_wxid(src)
+    unnamed = [
+        c
+        for c in rows
+        if c["kind"] == "group" and not (c.get("remark") or c.get("nickname")) and c.get("id")
+    ]
+    digests = group_digest(src, [int(c["id"]) for c in unnamed], rows, my_user)
+    names: dict[str, dict] = {}
+    for c in rows:
+        username = c["username"]
+        remark, nickname = c.get("remark") or "", c.get("nickname") or ""
+        if remark:
+            names[username] = {"name": remark, "source": "remark"}
+            continue
+        if nickname:
+            names[username] = {"name": nickname, "source": "nickname"}
+            continue
+        if c["kind"] == "person":
+            names[username] = {"name": username, "source": "id"}
+            continue
+        members = digests.get(int(c["id"]), []) if c.get("id") else []
+        total = (gmeta.get(username) or {}).get("member_count") or len(members)
+        if members:
+            head = members[:_DIGEST_HEAD]
+            label = "、".join(head)
+            if total and total > len(head):
+                label += f"等{total}人"
+            names[username] = {
+                "name": label,
+                "source": "members",
+                "digest": members[:_DIGEST_KEEP],
+            }
+        else:
+            names[username] = {"name": "群聊", "source": "fallback"}
+    _NAME_CACHE[key] = names
+    return names
+
+
+def entity_name(names: dict[str, dict], username: str) -> str:
+    return (names.get(username) or {}).get("name") or username
+
+
+def _entity(row: dict, gmeta: dict, smeta: dict, names: dict[str, dict]) -> dict:
     username = row["username"]
     g = gmeta.get(username, {})
     s = smeta.get(username, {})
+    named = names.get(username) or {}
     return {
         "id": username,
         "kind": row["kind"],
-        "name": row.get("remark") or row.get("nickname") or username,
+        "name": named.get("name") or row.get("remark") or row.get("nickname") or username,
+        "name_source": named.get("source") or "id",
         "remark": row.get("remark", ""),
         "nickname": row.get("nickname", ""),
         "alias": row.get("alias", ""),
@@ -259,10 +384,12 @@ def _entity(row: dict, gmeta: dict, smeta: dict) -> dict:
         "add_time": row.get("add_time", ""),
         "member_count": g.get("member_count"),
         "owner_id": g.get("owner"),
+        "owner_name": "",
         "notice": g.get("notice", ""),
         "last_active_at": _fmt(s.get("last_time")),
         "last_message": s.get("last_message", ""),
         "unread": s.get("unread", 0),
+        "members_digest": named.get("digest", []) if named.get("source") == "members" else [],
         "_last_ts": int(s.get("last_time") or 0),
     }
 
@@ -279,18 +406,24 @@ def list_entities(
     sort: str = "last_time",
     limit: int = 100,
     offset: int = 0,
+    detail: str = "lite",
 ) -> dict:
+    if scope not in ("session", "contact", "group", "all"):
+        return {
+            "ok": False,
+            "error": {
+                "code": "unknown_scope",
+                "message": f"未知 scope: {scope}",
+                "candidates": ["session", "contact", "group", "all"],
+            },
+            "hint": "写错取值不会自动回退，避免静默返回一份看起来正常的结果",
+        }
+    detail = str(detail or "lite").lower()
     contacts = load_contacts(src)
     gmeta = group_meta(src) if any(c["kind"] == "group" for c in contacts) else {}
     smeta = session_meta(src)
+    names = display_names(src, contacts)
     by_user = {c["username"]: c for c in contacts}
-
-    if scope not in ("session", "contact", "group", "all"):
-        return {
-            "error": f"未知 scope: {scope}",
-            "valid": ["session", "contact", "group", "all"],
-            "hint": "写错取值不会自动回退，避免静默返回一份看起来正常的结果",
-        }
 
     if scope == "session":
         rows = []
@@ -302,13 +435,13 @@ def list_entities(
                     "username": username,
                     "kind": "group" if username.endswith("@chatroom") else "person",
                     "remark": "",
-                    "nickname": username,
+                    "nickname": "",
                     "alias": "",
                     "is_friend": None,
                 }
-            rows.append(_entity(base, gmeta, {username: s}))
+            rows.append(_entity(base, gmeta, {username: s}, names))
     else:
-        rows = [_entity(c, gmeta, smeta) for c in contacts]
+        rows = [_entity(c, gmeta, smeta, names) for c in contacts]
         if scope == "group":
             rows = [r for r in rows if r["kind"] == "group"]
         elif scope == "contact":
@@ -317,10 +450,7 @@ def list_entities(
     kw = keyword.strip().lower()
     for r in rows:
         oid = r.get("owner_id") or ""
-        owner = by_user.get(oid) if oid else None
-        r["owner_name"] = (
-            (owner.get("remark") or owner.get("nickname") or oid) if owner else ""
-        )
+        r["owner_name"] = entity_name(names, oid) if oid else ""
     if kw:
         rows = [
             r
@@ -348,52 +478,223 @@ def list_entities(
 
     total = len(rows)
     page = rows[offset : offset + limit]
+    has_more = offset + len(page) < total
     for r in page:
         r.pop("_last_ts", None)
+        if not r.get("members_digest"):
+            r.pop("members_digest", None)
+        if detail == "lite":
+            r.pop("region", None)
+            r.pop("gender", None)
+            r.pop("add_time", None)
+            r.pop("notice", None)
     return {
+        "ok": True,
+        "detail": detail,
         "scope": scope,
-        "data_cutoff": src.data_cutoff("session"),
+        "data_until": src.data_until("session"),
         "total": total,
         "returned": len(page),
-        "has_more": offset + len(page) < total,
-        "next_offset": offset + len(page) if offset + len(page) < total else None,
+        "has_more": has_more,
+        "next": offset + len(page) if has_more else None,
         "entities": page,
     }
+
+
+_LOOKUP_CACHE: dict[tuple, dict[str, list[str]]] = {}
+
+
+def _lookup_index(src: LocalSource, contacts: list[dict], names: dict[str, dict]) -> dict[str, list[str]]:
+    """名字 -> wxid 的倒排表，精确命中走它，不再每次扫 3 万行。"""
+    key = ("lookup",) + _cache_key(src.path("contact"))
+    cached = _LOOKUP_CACHE.get(key)
+    if cached is not None:
+        return cached
+    index: dict[str, list[str]] = {}
+    for c in contacts:
+        username = c["username"]
+        for value in (username, c.get("remark") or "", c.get("nickname") or "", entity_name(names, username)):
+            if not value:
+                continue
+            bucket = index.setdefault(value, [])
+            if username not in bucket:
+                bucket.append(username)
+    _LOOKUP_CACHE.clear()
+    _LOOKUP_CACHE[key] = index
+    return index
 
 
 def resolve_name(src: LocalSource, query: str, limit: int = 5) -> dict:
     """名称解析：精确、包含、相似三级，返回候选而不是空结果。"""
     contacts = load_contacts(src)
     gmeta = group_meta(src)
+    names = display_names(src, contacts)
     q = (query or "").strip()
-    out: list[dict] = []
     if not q:
-        return {"query": q, "matched": False, "data_cutoff": src.data_cutoff("session"), "candidates": []}
+        return {"query": q, "matched": False, "data_until": src.data_until("session"), "candidates": []}
 
-    fields = ("id", "name", "remark", "nickname")
-    exact = [c for c in contacts if q in (c["username"], c["remark"], c["nickname"])]
+    def cand(c: dict, matched: str) -> dict:
+        return {
+            "id": c["username"],
+            "name": entity_name(names, c["username"]),
+            "kind": c["kind"],
+            "matched": matched,
+            "member_count": gmeta.get(c["username"], {}).get("member_count"),
+        }
+
+    index = _lookup_index(src, contacts, names)
+    by_username = {c["username"]: c for c in contacts}
+    exact = [by_username[u] for u in index.get(q, []) if u in by_username]
     if exact:
-        out = [{"id": c["username"], "name": c["remark"] or c["nickname"] or c["username"],
-                "kind": c["kind"], "matched": "exact",
-                "member_count": gmeta.get(c["username"], {}).get("member_count")} for c in exact[:limit]]
-        return {"query": q, "matched": True, "data_cutoff": src.data_cutoff("session"), "candidates": out}
+        out = [cand(c, "exact") for c in exact[:limit]]
+        return {"query": q, "matched": True, "data_until": src.data_until("session"), "candidates": out}
 
     ql = q.lower()
     contains = [
         c
         for c in contacts
-        if ql in ((c["remark"] or "") + (c["nickname"] or "") + c["username"]).lower()
+        if ql
+        in (
+            (c["remark"] or "") + (c["nickname"] or "") + c["username"] + entity_name(names, c["username"])
+        ).lower()
     ]
     if contains:
-        out = [{"id": c["username"], "name": c["remark"] or c["nickname"] or c["username"],
-                "kind": c["kind"], "matched": "contains",
-                "member_count": gmeta.get(c["username"], {}).get("member_count")} for c in contains[:limit]]
-        return {"query": q, "matched": True, "data_cutoff": src.data_cutoff("session"), "candidates": out}
+        out = [cand(c, "contains") for c in contains[:limit]]
+        return {"query": q, "matched": True, "data_until": src.data_until("session"), "candidates": out}
 
-    names = [(c["remark"] or c["nickname"] or c["username"], c) for c in contacts]
-    close = difflib.get_close_matches(q, [n for n, _ in names], n=limit, cutoff=0.4)
-    picked = {n for n in close}
-    out = [{"id": c["username"], "name": n, "kind": c["kind"], "matched": "similar",
-            "member_count": gmeta.get(c["username"], {}).get("member_count")}
-           for n, c in names if n in picked]
-    return {"query": q, "matched": bool(out), "data_cutoff": src.data_cutoff("session"), "candidates": out}
+    pairs = [(entity_name(names, c["username"]), c) for c in contacts]
+    close = difflib.get_close_matches(q, [n for n, _ in pairs], n=limit, cutoff=0.4)
+    picked = set(close)
+    out = [cand(c, "similar") for n, c in pairs if n in picked]
+    return {
+        "query": q,
+        "matched": bool(out),
+        "data_until": src.data_until("session"),
+        "candidates": out,
+    }
+
+
+def _resolve_person(contacts: list[dict], names: dict[str, dict], query: str) -> tuple[str, list[dict]]:
+    """把名字解析成 wxid，返回 (wxid, 歧义候选)。解析不到 wxid 为空。"""
+    q = query.strip()
+    if not q:
+        return "", []
+    if any(c["username"] == q for c in contacts):
+        return q, []
+    hits = [
+        c["username"]
+        for c in contacts
+        if q in (c.get("remark") or "")
+        or q in (c.get("nickname") or "")
+        or entity_name(names, c["username"]) == q
+        or q == (c.get("alias") or "")
+    ]
+    if len(hits) == 1:
+        return hits[0], []
+    if hits:
+        return "", [{"id": u, "name": entity_name(names, u)} for u in hits[:5]]
+    return "", []
+
+
+def groups_by_members(
+    src: LocalSource,
+    members: list[str],
+    limit: int = 20,
+    require_all: bool = True,
+) -> dict:
+    """按成员组合找群：这些人同时在哪些群里。
+
+    输入可以是名称、备注、昵称、微信号或 wxid，支持用逗号分隔。
+    解析不到或有歧义的名字进 unresolved，不会当成「没有这个群」。
+    """
+    contacts = load_contacts(src)
+    names = display_names(src, contacts)
+    gmeta = group_meta(src)
+    wanted: list[str] = []
+    unresolved: list[dict] = []
+    for raw in members or []:
+        for part in str(raw).replace("，", ",").split(","):
+            q = part.strip()
+            if not q:
+                continue
+            username, ambiguous = _resolve_person(contacts, names, q)
+            if username:
+                if username not in wanted:
+                    wanted.append(username)
+            else:
+                unresolved.append(
+                    {
+                        "input": q,
+                        "reason": "ambiguous" if ambiguous else "not_found",
+                        "candidates": ambiguous,
+                    }
+                )
+    if not wanted:
+        return {
+            "ok": False,
+            "error": {
+                "code": "no_valid_members",
+                "message": "没有一个成员名被解析到，无法按成员找群",
+                "candidates": [],
+            },
+            "unresolved": unresolved,
+        }
+
+    db = src.path("contact")
+    if not db.exists():
+        return {"ok": False, "error": {"code": "no_contact_db", "message": "联系人库不存在"}}
+    conn = connect_ro(db)
+    try:
+        rows = conn.execute("SELECT room_id, member_id FROM chatroom_member").fetchall()
+    finally:
+        conn.close()
+    id_to_user = {int(c["id"]): c["username"] for c in contacts if c.get("id")}
+    room_to_group = {
+        int(c["id"]): c["username"] for c in contacts if c.get("id") and c["kind"] == "group"
+    }
+    room_members: dict[int, set[str]] = {}
+    for room_id, member_id in rows:
+        username = id_to_user.get(int(member_id or 0))
+        if username:
+            room_members.setdefault(int(room_id), set()).add(username)
+
+    target = set(wanted)
+    groups: list[dict] = []
+    for room_id, members_set in room_members.items():
+        hit = target & members_set
+        if not hit:
+            continue
+        if require_all and hit != target:
+            continue
+        group_id = room_to_group.get(room_id)
+        if not group_id:
+            continue
+        named = names.get(group_id) or {}
+        groups.append(
+            {
+                "id": group_id,
+                "name": named.get("name") or group_id,
+                "name_source": named.get("source") or "id",
+                "member_count": (gmeta.get(group_id) or {}).get("member_count"),
+                "matched": [entity_name(names, u) for u in wanted if u in hit],
+                "missing": [entity_name(names, u) for u in wanted if u not in hit],
+            }
+        )
+    groups.sort(key=lambda g: (g["member_count"] or 0, g["name"]))
+    total = len(groups)
+    page = groups[:limit]
+    return {
+        "ok": True,
+        "criteria": {
+            "members": [entity_name(names, u) for u in wanted],
+            "member_ids": wanted,
+            "require_all": require_all,
+        },
+        "data_until": src.data_until("contact"),
+        "total": total,
+        "returned": len(page),
+        "has_more": total > len(page),
+        "next": None,
+        "groups": page,
+        "unresolved": unresolved,
+    }

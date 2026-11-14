@@ -18,7 +18,7 @@ def status(src: LocalSource) -> dict:
     info = src.detect()
     return {
         "state": "ok" if info.get("ready") else "not_ready",
-        "data_cutoff": info.get("data_cutoff", ""),
+        "data_until": info.get("data_until", ""),
         "root": info.get("root", ""),
         "message_dbs": info.get("message_dbs", 0),
         "contacts": len(persons),

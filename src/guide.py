@@ -11,84 +11,105 @@ INSTRUCTIONS = """微信聊天记录只读查询（本机数据，不联网）�
 六个查询工具：list_entities 列会话与联系人，get_messages 读消息，relations 查关系，
 search 搜索，list_moments 朋友圈，list_favorites 收藏。
 
+消息不带收发方向：from 为「我」就是本人发的。默认 detail=lite，要 ID 与类型传 detail="full"。
+
 查询前会自动按 TTL（默认 60 秒）增量刷新，不需要预热脚本；要立刻拿最新数据调 system(action="sync")。
 """
 
 GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个工具，其中 system 是入口。
 
 【账号是谁】
-- system(action="start") 与 get_messages 返回里都有 self 字段：id 是账号 wxid，nickname 是微信昵称，alias 是微信号，note 写明怎么区分。
-- 每条消息只给 sender_name：自己发的显示「我」，别人发的显示备注优先的名字。要看 wxid 去结果尾部的 senders 表按名字反查，不用每条消息重复长 ID。
+- system(action="start") 与 get_messages 返回里都有 self：id 是账号 wxid，nickname 是微信昵称，alias 是微信号。
+- 每条消息只有 from：本人发的固定「我」，别人发的是备注优先的显示名，系统消息的 from 为空。要看 wxid 去 senders 表（detail=full 时才有）按名字反查。
+
+【消息长什么样】
+lite 档（默认）：id、time、from、text，非纯文本时多一个 media。跨会话查询时每行还带 chat。
+full 档：再加 sender_id、type、subtype、chat_id、chat_name，以及 senders 表。
+raw 档：再加 local_type、raw（原始 XML）与 db，仅供排查。
+
+text 是自足的，单看这一行就能读懂，不用再拼类型：
+- 文字：原文。图片：「[图片]」。表情：「[表情]」。
+- 语音：转写全文，没有转写时「[语音 12 秒]」。视频：「[视频 12 秒]」。
+- 文件：「[文件] 简历.pdf」。链接：标题。转账：「[转账] 金额」。红包：「[红包]」。
+- 位置：「[位置] 地名」。通话：「[通话] 时长」。应用消息：「[小程序] 标题」等。
+- 系统消息：「[系统] 某某 撤回了一条消息」这类一句话，原文只在 raw 档。
+
+引用消息的 text 是回复正文，被引内容在 quote{from, text}。
+
+【群名】
+有备注用备注，有群昵称用群昵称，都没有时用成员昵称拼（如「甲、乙、丙等8人」），
+name_source 标明来源：remark / nickname / members / fallback。拼出来的名字只用于辨认，
+要精确找群用 id。四个来源都取不到时名字是「群聊」。
+
+【分页】
+固定四件套：total（命中总数）、returned（本次条数）、has_more、next。
+消息的 next 是游标字符串，原样传回 cursor 取下一页；其余工具的 next 是 offset 数值，传回 offset。
+多会话查询时 per_target_limit 控制每个会话最多取多少条，0 表示不单独限制；
+被截断的会话会在 warnings 里点名，不会静默丢数据。
 
 【默认行为】
-- 调任何查询工具时，服务会自己按 TTL（默认 60 秒）增量刷新解密数据。不需要先跑脚本，也不需要重启服务。
-- 结果里的 refresh 字段说明本次做了什么：refreshed=true 表示刚解了 changed_dbs 里的库；skipped=ttl 表示在 TTL 内直接用了现有数据；locked 表示另一个进程正在刷。
-- data_cutoff 是该数据源最后一次写入的时间，不是最新消息时间。消息看 message 库，朋友圈看 sns 库，收藏看 favorite 库，会话列表看 session 与 contact。
-- 需要绕过 TTL 立刻拉最新时，调 system(action="sync")。
+- 调任何查询工具时，服务会按 TTL（默认 60 秒）增量刷新解密数据，不需要预热脚本，也不需要重启服务。
+- refresh 说明本次做了什么：refreshed=true 表示刚解了 changed_dbs 里的库；skipped=ttl 表示 TTL 内直接用现有数据；locked 表示另一个进程在刷。
+- data_until 是该数据源最后一次写入的时间，不是最新消息时间。消息看 message 库，朋友圈看 sns，收藏看 favorite，会话看 session 与 contact。
+- 要绕过 TTL 立刻拉最新时调 system(action="sync")。
+- refresh.failed_detail 是解密失败原因；refresh.shadow 表示正本被别的进程占用、已写旁路副本，查到的仍是最新数据。
 
 【七个工具】
-- system：系统入口，三种固定动作。action=start 返回本说明书与当前数据状态，新会话先调它；action=status 只看数据新鲜度；action=sync 立刻刷新解密数据与索引。
-- list_entities：列会话 / 联系人 / 群。scope=session|contact|group|all。返回名称、备注、微信号、地区、性别、好友关系、群成员数、群主、群公告、未读数、最后活跃时间。
-- get_messages：读消息。targets 可给多个会话（人或群混传），sender 限定发言人，types 限定类型，时间用 start_date / end_date。默认最新优先，数组第一个就是最新的。
-- relations：四种关系。group_members 群成员；common_groups 某人所在的群；person_activity 某人在多群的发言；activity 单会话统计（按天、按小时、按类型、发言人排行）。
-- search：一次搜实体与消息。消息带命中片段，支持 offset 翻页。
+- system：系统入口。action=start 返回本说明书与当前数据状态；status 只看数据新鲜度；sync 立刻刷新数据与索引。
+- list_entities：列会话 / 联系人 / 群。scope=session|contact|group|all。给名称、备注、微信号、地区、性别、好友关系、成员数、群主、群公告、未读数、最后活跃时间、name_source。
+- get_messages：读消息。targets 可混传人与群；sender 限定发言人；types 限定类型；时间用 start_date / end_date。默认最新优先，数组第一个最新。
+- relations：group_members 群成员；common_groups 某人所在的群；person_activity 某人在多群的发言；activity 单会话统计。
+- search：一次搜实体与消息，消息带命中片段，offset 翻页。
 - list_moments：朋友圈动态，含图片链接、点赞、评论。
 - list_favorites：收藏条目，含类型、链接、标签。
 
-【读消息时各类内容怎么给】
-媒体默认就会处理（include_media 默认开）。返回条数超过 50 条时自动跳过媒体提取，
-因为那种量级会被截成 3 条预览，提取了也浪费。需要关掉就传 include_media=false。
+【types 取值】
+text image voice video emoticon file link mini_program quote chat_record channels
+transfer red_packet location card voip system revoked。
+写错取值会直接报错并给出 candidates，不会静默返回 0 条。
 
-具体行为：
-- 图片：直接内联返回图片本身，你能直接看到图，不需要再调工具读文件。
-- 表情：内联首帧图。
-- 视频：内联封面图，media 里标着 kind=video 与时长。
-- 语音：直接给转写文字（voice_text），不内联音频。
-- 链接、小程序、视频号：给 media.url，可直接在浏览器打开。
-- 转账：给 media.amount 金额与 des。红包：给可打开的 url，金额本地不存。
-- 文件（PDF、表格、压缩包等）：不需要任何参数，读消息时自动复制到导出目录，media.path 就是副本路径，可直接读；source_path 是微信原路径。
+【读媒体】
+媒体默认就处理（include_media 默认开）。返回条数超过 50 条时自动跳过媒体提取，因为那种量级会被截成预览。
+- 图片、表情：直接内联图片本身，能直接看到图，不用再读文件。
+- 视频：内联封面（media.cover_path），mp4 原件在 media.path。
+- 语音：给转写文字并写进 text，不内联音频；要音频传 extract_media。
+- 链接、小程序、视频号：media.url 可直接打开。转账给 media.amount。红包金额本地不存。
+- 文件：自动复制到导出目录，media.path 是副本路径可直接读，source_path 是微信原路径。
 
-媒体处理比纯文本慢：批量取数不要同时开 include_media，需要看图时配合 types 缩小范围（例如 types=["image"]）单独查一次。
+媒体处理比纯文本慢：批量取数不要开 include_media，要看图时配合 types 单独查（如 types=["image"]）。
+内联图片总字节超过 6MB 时不内联，改成落盘并给 media.path，media_inline.note 说明还有多少张。
+图片定位三级兜底：message_resource 落盘基名、hardlink 登记表、按消息自带长度与宽高认文件。
 
-体积保护：内联图片总字节超过 6MB 时，超出的不内联，改成落盘并在 media.path 给路径，media_inline.note 会说明还有多少张。
-
-图片定位三级兜底：message_resource 里的落盘基名、hardlink 登记表、按消息自带长度与宽高认文件，任一级命中都能读到。
-
-拿不到图或语音时 media 里一定带 missing_reason，别猜：no_local_image（原图和缩略图都不在本机，这张图从没在微信里打开过，让用户点开一次）、no_local_file、no_image_key、decode_failed、voice_model_missing、too_many_rows、not_requested。顶层 media_missing 给各类张数。
-
-只有缩略图时 media.source=thumb，media.note 会说明原图没落盘。长截图（长宽比超过 3）会切成多段返回，media.tiles 是段数，段间有约 80 像素重叠，边界重复的一两行属正常；整图在 media.path，按顺序看这几段。
-
-refresh.failed_detail 是解密失败原因，refresh.shadow 表示正本被别的进程占用、已写到旁路副本，查询到的仍是最新数据。
-
-想把媒体原件存成文件时用 extract_media：留空不存，auto 存到导出目录，也可传绝对目录。语音会从微信的 SILK 转成可直接播放的 WAV。
+拿不到媒体时 media 一定带 missing_reason，别猜：no_local_image（原图和缩略图都不在本机，
+这张图从没在微信里打开过，让用户点开一次）、no_local_file、no_image_key、decode_failed、
+voice_model_missing、no_audio、too_many_rows、not_requested、budget_exhausted。顶层 media_missing 给各类张数。
+只有缩略图时 media.source=thumb，media.note 会说明原图未落盘。长截图（长宽比超过 3）切成多段返回，
+media.tiles 是段数，段间约 80 像素重叠，边界重复的一两行属正常；整图在 media.path。
 
 【结果很大时】
-- 超过 200 行或 80KB 会自动落盘，messages 只留前 3 条预览，auto_export 里给路径。
-- 想强制落盘用 output="file"，格式 format=csv|json|md|html。
-- 落盘目录默认是本进程的 exports/run-<pid>-<时间>/，12 小时后自动清理；想放到指定位置用 output_dir。
-- 拿到路径后用文件读取工具去读，不要试图把几千条塞进对话。
+- 超过 200 行或 80KB 自动落盘，只留前 3 条预览，auto_export 给路径与 is_partial。
+- 强制落盘用 output="file"：会按游标翻页取满再写，不只写当前页；is_partial=false 说明全量。
+- format 可选 csv / json / ndjson / md / text / html。md 与 text 按会话分节、一行一条，适合直接给人看。
+- 落盘目录默认本进程的 exports/run-<pid>-<时间>/，12 小时后自动清理；指定位置用 output_dir。
+- 拿到路径后用文件读取工具去读，不要把几千条塞进对话。
 
 【复杂查询怎么办】
-本工具只做单次明确的查询，不做复杂聚合。多条件组合按两种方式处理：
-
-一、多次调用自己拼（简单场景，推荐）
-- 找出共同群里最近活跃的人：先 relations(kind="common_groups") 拿群列表，再 get_messages(targets=[...]) 批量拉消息，自己筛。
-- 某些群的某些人的发言：sender 一次只能给一个人，多人就多调几次。
-- 最近一周谁在群里说过话：get_messages 拉一周消息，自己按 sender 去重。
-- 群里某个人的成员资料：relations(group_members) 拿不到的条件，配合 list_entities(scope="contact") 自己 join。
-
-二、写脚本编排（量大或需要精确聚合）
-项目目录下提供与 MCP 同参的 CLI，也可以直接在 Python 里调 service 层：
-  wechatq list / messages / rel / search / moments / favorites / export / report / status / sync / index
-  例：wechatq messages --targets 某群 --start 2026-11-01 --limit 500 --json
+本工具只做常用查询，不做复杂聚合，复杂的事交给脚本调 CLI。
+一、多次调用自己拼：先 list_entities / relations 拿范围，再 get_messages 分批取，自己聚合。
+二、写脚本：项目提供与 MCP 同参的 CLI，默认输出 NDJSON（一行一条），最适合管道与循环：
+  python -m src.cli list / messages / rel / search / groups / moments / favorites / export / report / status / sync / index
+  例：python -m src.cli messages --targets 某群 --start 2026-11-01 --limit 500
+  例：python -m src.cli groups --members 甲 乙 --json        # 按成员组合找群
+  例：python -m src.cli messages --targets 某群 --format text  # 人读分节文本
   Python：from src.service import Service; svc = Service(); svc.get_messages(targets=[...], limit=500)
-注意：Service 默认也会自动按 TTL 刷新（auto_refresh=True）；只有 CLI 与显式传 auto_refresh=False 时才关掉。
+Service 默认也按 TTL 刷新（auto_refresh=True），显式传 False 才关。
 
 【几个容易踩的点】
-- data_cutoff 不是最新消息时间，是数据源最后写入时间，差几分钟属于正常。
+- data_until 不是最新消息时间，是数据源最后写入时间，差几分钟属正常。
 - 微信还没落盘的 WAL 内容谁都读不到，刚发的消息可能差一步，等几秒再试。
-- 群里的非好友只有名字：本地没缓存过资料卡的人查不到微信号、地区、性别，这是微信本身的行为。
-- 群管理员本地不存，标不了；群主能标（chat_room.owner）。
+- 群里的非好友只有名字：没缓存过资料卡的人查不到微信号、地区、性别，这是微信本身的行为。
+- 群管理员、群昵称、@提及都不在本地库里，标不了；群主在 chat_room.owner。
+- 拼出来的群名里可能和客户端有细微差别（客户端用群昵称，本地只有备注与昵称）。
 - 朋友圈与收藏有自己的关键词参数，不进 search 的全库索引。
-- 语音识别依赖本地模型，模型缺失时结果里会有 warnings 告诉你模型该放哪。
+- 语音识别依赖本地模型，模型缺失时结果里有 warnings 告诉模型该放哪。
 """

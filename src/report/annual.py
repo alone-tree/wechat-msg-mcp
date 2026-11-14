@@ -327,7 +327,7 @@ def run(src, year: int, out_dir: str) -> dict:
     meta = {
         "year": year,
         "generated_at": generated_at,
-        "data_cutoff": src.data_cutoff() if hasattr(src, "data_cutoff") else "",
+        "data_until": src.data_until() if hasattr(src, "data_until") else "",
         "message_dbs": len(src.message_dbs()),
         "tables": profile["tables"],
         "db_messages_total": sum(e["total_all"] for e in profile["chats"].values()),

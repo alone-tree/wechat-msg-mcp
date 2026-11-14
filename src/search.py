@@ -82,42 +82,49 @@ def search(
     if scope in ("message", "all"):
         lo, hi = _ts(since), _ts_end(until)
         from .db.sender import ContactIndex
+        from .entities import display_names
 
         contacts = ContactIndex()
-        names = {}
         for c in load_contacts(src):
             contacts.add({"id": c.get("id"), **c})
-            names[c["username"]] = c.get("remark") or c.get("nickname") or c["username"]
+        named = display_names(src)
+        try:
+            from .config import get_account_wxid
+
+            my_user = get_account_wxid()
+        except Exception:
+            my_user = ""
         msg_total = index.count_query(src, query, since=lo, until=hi)
         for hit in index.query(src, query, limit=limit, offset=offset, since=lo, until=hi):
             raw_type = int(hit["type"] or 0)
+            sid = hit["sender_id"]
             msgs.append(
                 {
                     "db": hit["db"],
-                    "local_id": hit["local_id"],
+                    "id": hit["local_id"],
                     "chat_id": hit["chat_id"],
-                    "chat_name": names.get(hit["chat_id"], hit["chat_id"]),
-                    "sender_id": hit["sender_id"],
-                    "sender_name": contacts.name_of(hit["sender_id"]) or "",
+                    "chat_name": (named.get(hit["chat_id"]) or {}).get("name") or hit["chat_id"],
+                    "sender_id": sid,
+                    "from": "我" if (my_user and sid == my_user) else (contacts.name_of(sid) or ""),
                     "time": __import__("datetime")
                     .datetime.fromtimestamp(hit["ts"])
                     .strftime("%Y-%m-%d %H:%M:%S")
                     if hit["ts"]
                     else "",
                     "type": main_type_name(raw_type),
-                    "local_type": raw_type,
                     "snippet": _despace(hit.get("snip") or ""),
                 }
             )
-    next_offset = offset + len(msgs) if scope in ("message", "all") and msg_total > offset + len(msgs) else None
+    next = offset + len(msgs) if scope in ("message", "all") and msg_total > offset + len(msgs) else None
     return {
+        "ok": True,
         "query": query,
         "scope": scope,
-        "data_cutoff": src.data_cutoff(),
+        "data_until": src.data_until(),
         "entities": entities,
         "messages": msgs,
         "counts": {"entities": len(entities), "messages": len(msgs)},
         "total": {"entities": len(entities) if offset == 0 else None, "messages": msg_total},
-        "has_more": next_offset is not None,
-        "next_offset": next_offset,
+        "has_more": next is not None,
+        "next": next,
     }

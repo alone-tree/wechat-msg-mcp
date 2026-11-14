@@ -390,7 +390,7 @@ def render_markdown(summary: dict, meta: dict) -> str:
     lines.append(f"# {summary['year']} 年微信聊天年度报告")
     lines.append("")
     lines.append(
-        f"数据截止 {meta.get('data_cutoff', '')}，生成于 {meta.get('generated_at', '')}。"
+        f"数据截止 {meta.get('data_until', '')}，生成于 {meta.get('generated_at', '')}。"
         "全部为聚合结果，不含正文与真实 ID；群用 sha1 前 8 位标识，单聊用地址簿显示名。"
     )
     lines.append("")

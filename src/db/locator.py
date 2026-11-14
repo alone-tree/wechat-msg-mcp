@@ -16,7 +16,7 @@ class DataSource(Protocol):
     def detect(self) -> dict: ...
     def path(self, kind: str) -> Path: ...
     def message_dbs(self) -> list[Path]: ...
-    def data_cutoff(self) -> str: ...
+    def data_until(self) -> str: ...
 
 
 def _fmt_ts(ts: float) -> str:
@@ -104,7 +104,7 @@ class LocalSource:
         stamps = [p.stat().st_mtime for p in files if p.exists()]
         return _fmt_ts(max(stamps)) if stamps else ""
 
-    def data_cutoff(self, kind: str = "all") -> str:
+    def data_until(self, kind: str = "all") -> str:
         """按数据面返回截止时间。
 
         kind: message / sns / favorite / contact / session / all。
@@ -131,6 +131,6 @@ class LocalSource:
             "contact_db": str(self.path("contact")),
             "message_dbs": len(self.message_dbs()),
             "ready": self.path("contact").exists(),
-            "data_cutoff": self.data_cutoff(),
+            "data_until": self.data_until(),
             "files": {p.name: _fmt_ts(p.stat().st_mtime) for p in files if p.exists()},
         }

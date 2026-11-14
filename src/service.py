@@ -41,9 +41,46 @@ class Service:
     def resolve(self, name: str, limit: int = 5) -> dict:
         return entities.resolve_name(self.src, name, limit=limit)
 
+    def groups_by_members(self, members: list[str], limit: int = 20, require_all: bool = True) -> dict:
+        """按成员组合找群，CLI 的 groups 子命令用。"""
+        return self._with_fresh(
+            entities.groups_by_members(self.src, members, limit=limit, require_all=require_all)
+        )
+
     # 消息
     def get_messages(self, **kwargs) -> dict:
         return self._with_fresh(messages.list_messages(self.src, **kwargs))
+
+    def export_messages(self, out_dir: str = "", fmt: str = "csv", **kwargs) -> dict:
+        """按游标翻页取满再落盘，不只导当前页。CLI 与 MCP 共用这一份。"""
+        from . import export
+
+        base = dict(kwargs)
+        base["include_media"] = False
+        if str(base.get("detail") or "lite") == "lite":
+            base["detail"] = "full"
+        rows: list = []
+        cursor = ""
+        pages = 0
+        envelope: dict = {}
+        partial = False
+        while True:
+            obj = self.get_messages(**{**base, "limit": 1000, "cursor": cursor})
+            if not obj.get("ok", True):
+                return obj
+            if not envelope:
+                envelope = {k: v for k, v in obj.items() if k not in ("messages", "_images")}
+            rows.extend(obj.get("messages") or [])
+            pages += 1
+            cursor = obj.get("next") or ""
+            partial = bool(obj.get("has_more"))
+            if not partial or not cursor or pages >= 200 or len(rows) >= 200000:
+                break
+        result = export.write_rows(
+            rows, fmt=fmt, out_dir=out_dir, prefix="messages", kind="messages", envelope=envelope
+        )
+        result.update({"pages": pages, "is_partial": partial})
+        return result
 
     # 关系
     def relations(self, kind: str, subject: str, **kwargs) -> dict:

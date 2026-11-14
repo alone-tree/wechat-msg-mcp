@@ -131,9 +131,10 @@ def check_decrypted_dir(decrypted_dir: Optional[Path] = None) -> tuple[bool, str
 
 
 def get_account_wxid() -> str:
-    """推断本机登录账号的 wxid，用于判群消息是不是自己发的。
+    """推断本机登录账号的 wxid，用于把「谁发的」标成「我」还是具体的人。
 
-    优先级：WECHAT_MY_WXID 环境变量 > WECHAT_FILES_DIR 下的账号目录名。
+    优先级：WECHAT_MY_WXID 环境变量 > WECHAT_FILES_DIR 下的账号目录名
+    > 常见微信目录探测（CLI 也走这条路，不依赖 MCP 的 env）。
     目录名形如 wxid_xxxx_suffix，wxid 部分是 wxid_ 加字母数字。
     """
     import re
@@ -141,11 +142,8 @@ def get_account_wxid() -> str:
     env_wxid = os.environ.get("WECHAT_MY_WXID")
     if env_wxid:
         return env_wxid.strip()
-    files_dir = os.environ.get("WECHAT_FILES_DIR")
-    if not files_dir:
-        return ""
-    base = Path(files_dir).expanduser()
-    if not base.exists():
+    base = get_wechat_files_dir()
+    if base is None or not base.exists():
         return ""
     for d in base.iterdir():
         if not d.is_dir():

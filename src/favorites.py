@@ -99,7 +99,7 @@ def list_favorites(
 
     db = src.path("favorite")
     if not db.exists():
-        return {"error": "favorite.db 不存在", "items": [], "total": 0, "data_cutoff": src.data_cutoff("favorite")}
+        return {"error": "favorite.db 不存在", "items": [], "total": 0, "data_until": src.data_until("favorite")}
 
     names = {
         c["username"]: (c.get("remark") or c.get("nickname") or c["username"])
@@ -173,9 +173,11 @@ def list_favorites(
     for item in page:
         item.pop("ts", None)
     return {
+        "ok": True,
         "total": total,
         "returned": len(page),
         "has_more": offset + len(page) < total,
-        "data_cutoff": src.data_cutoff("favorite"),
+        "next": offset + len(page) if offset + len(page) < total else None,
+        "data_until": src.data_until("favorite"),
         "items": page,
     }

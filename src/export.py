@@ -1,7 +1,9 @@
 """导出：把查询结果写成文件。
 
-依据 docs/重构方案-2026-11-13.md 第 9 与 20 节：
-超过阈值自动落盘；格式 md/json/csv/html；大批量分片写入。
+依据 docs/重构方案-消息模型与输出规范-2026-11-14.md 第 6 节：
+- text / md 走会话分节，一行一条，多行正文缩进续写，不用表格；
+- csv 固定列并剔掉全空列，媒体对象压成短 JSON；
+- json / ndjson 走同一份数据，ndjson 一行一条。
 每个进程写自己的 exports/run-<pid>-<启动时间>/ 目录，多实例互不覆盖；
 启动时清理 run 目录下超过 12 小时的文件。AI 指定目录时不清理。
 """
@@ -14,21 +16,15 @@ import os
 import time
 from pathlib import Path
 
+from . import render
+
 RUN_RETENTION_HOURS = 12.0
 _RUN_TAG = time.strftime("%Y%m%d-%H%M%S")
 _RUN_DIR: Path | None = None
 _SEQ = 0
 
-_MESSAGE_COLUMNS = [
-    "time",
-    "direction",
-    "chat_name",
-    "sender_name",
-    "type",
-    "subtype",
-    "local_id",
-    "text",
-]
+MESSAGE_COLUMNS = ["time", "chat_name", "from", "type", "subtype", "id", "text", "media", "quote"]
+FORMATS = ("csv", "json", "ndjson", "md", "text", "html")
 
 
 def _default_dir() -> Path:
@@ -93,34 +89,86 @@ def _name(prefix: str, fmt: str, index: int = 0) -> str:
     return f"{prefix}-{stamp}{part}-{_SEQ:04d}.{fmt}"
 
 
+def _cell(value) -> str:
+    """单元格取值：容器压成短 JSON，其余转字符串。"""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def columns_of(rows: list[dict], columns: list[str] | None = None) -> list[str]:
+    """列清单：先按给定顺序，再补出现过的键；全空列直接剔掉。"""
+    if columns:
+        base = [c for c in columns]
+        if not rows:
+            return base
+    else:
+        base = []
+        for row in rows:
+            for key in row:
+                if key not in base and not key.startswith("_"):
+                    base.append(key)
+    keep = []
+    for key in base:
+        if any(_cell(row.get(key)) != "" for row in rows):
+            keep.append(key)
+    return keep
+
+
 def render_csv(rows: list[dict], columns: list[str]) -> str:
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow({c: row.get(c, "") for c in columns})
+        writer.writerow({c: _cell(row.get(c)) for c in columns})
     return buf.getvalue()
 
 
-def render_md(rows: list[dict], columns: list[str]) -> str:
+def render_md_table(rows: list[dict], columns: list[str]) -> str:
     lines = ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
     for row in rows:
-        lines.append("| " + " | ".join(str(row.get(c, "")).replace("|", "\\|") for c in columns) + " |")
+        cells = [_cell(row.get(c)).replace("|", "\\|").replace("\n", " ") for c in columns]
+        lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
 
 def render_html(rows: list[dict], columns: list[str], title: str = "导出结果") -> str:
     head = "".join(f"<th>{c}</th>" for c in columns)
     body = "".join(
-        "<tr>" + "".join(f"<td>{str(row.get(c, ''))}</td>" for c in columns) + "</tr>" for row in rows
+        "<tr>" + "".join(f"<td>{_cell(row.get(c))}</td>" for c in columns) + "</tr>" for row in rows
     )
     return (
         "<!doctype html><meta charset='utf-8'><title>%s</title>"
         "<style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse}"
-        "td,th{border:1px solid #ddd;padding:4px 8px;text-align:left}</style>"
+        "td,th{border:1px solid #ddd;padding:4px 8px;text-align:left;white-space:pre-wrap}</style>"
         "<h3>%s</h3><table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>"
         % (title, title, head, body)
     )
+
+
+def _payload(part: list[dict], fmt: str, cols: list[str], kind: str, envelope: dict | None) -> str:
+    if kind == "messages":
+        obj = {"messages": part}
+        if envelope:
+            obj.update({k: v for k, v in envelope.items() if k != "messages"})
+        obj["returned"] = len(part)
+        if fmt == "text":
+            return render.render_text(obj)
+        if fmt == "md":
+            return render.render_md(obj)
+        if fmt == "ndjson":
+            return render.render_ndjson(obj)
+    if fmt == "json":
+        return json.dumps(part, ensure_ascii=False, indent=2)
+    if fmt == "csv":
+        return render_csv(part, cols)
+    if fmt == "md":
+        return render_md_table(part, cols)
+    if fmt == "ndjson":
+        return "\n".join(json.dumps(row, ensure_ascii=False) for row in part) + "\n"
+    return render_html(part, cols)
 
 
 def write_rows(
@@ -130,23 +178,20 @@ def write_rows(
     prefix: str = "export",
     columns: list[str] | None = None,
     chunk: int = 50000,
+    kind: str = "rows",
+    envelope: dict | None = None,
 ) -> dict:
-    fmt = fmt if fmt in ("json", "csv", "md", "html") else "csv"
+    """写文件。kind=messages 时 text/md 走会话分节渲染。"""
+    fmt = fmt if fmt in FORMATS else "csv"
     out = Path(out_dir) if out_dir else run_dir()
     out.mkdir(parents=True, exist_ok=True)
-    cols = columns or (list(rows[0].keys()) if rows else _MESSAGE_COLUMNS)
-    files = []
+    cols = columns_of(rows, columns or (MESSAGE_COLUMNS if kind == "messages" else None))
+    encoding = "utf-8-sig" if fmt == "csv" else "utf-8"
+    files: list[str] = []
     total = 0
     if not rows:
         path = out / _name(prefix, fmt)
-        if fmt == "csv":
-            path.write_text(render_csv([], columns or _MESSAGE_COLUMNS), encoding="utf-8-sig", newline="")
-        elif fmt == "json":
-            path.write_text("[]", encoding="utf-8")
-        elif fmt == "md":
-            path.write_text(render_md([], columns or _MESSAGE_COLUMNS), encoding="utf-8")
-        else:
-            path.write_text(render_html([], columns or _MESSAGE_COLUMNS), encoding="utf-8")
+        path.write_text(_payload([], fmt, cols, kind, envelope), encoding=encoding, newline="" if fmt == "csv" else "")
         return {
             "exported": True,
             "path": str(path),
@@ -154,19 +199,17 @@ def write_rows(
             "files": [str(path)],
             "rows": 0,
             "bytes": path.stat().st_size,
+            "format": fmt,
             "note": "无匹配数据，已写入仅含表头的空文件",
         }
     for i in range(0, len(rows), chunk):
         part = rows[i : i + chunk]
         path = out / _name(prefix, fmt, i // chunk)
-        if fmt == "json":
-            path.write_text(json.dumps(part, ensure_ascii=False, indent=2), encoding="utf-8")
-        elif fmt == "csv":
-            path.write_text(render_csv(part, cols), encoding="utf-8-sig", newline="")
-        elif fmt == "md":
-            path.write_text(render_md(part, cols), encoding="utf-8")
-        else:
-            path.write_text(render_html(part, cols), encoding="utf-8")
+        path.write_text(
+            _payload(part, fmt, cols, kind, envelope),
+            encoding=encoding,
+            newline="" if fmt == "csv" else "",
+        )
         files.append(str(path))
         total += len(part)
     return {
@@ -175,4 +218,6 @@ def write_rows(
         "files": files,
         "rows": total,
         "bytes": sum(Path(f).stat().st_size for f in files),
+        "format": fmt,
+        "columns": cols,
     }
