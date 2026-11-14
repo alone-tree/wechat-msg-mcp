@@ -18,6 +18,20 @@
 
 工具清单与参数以 USAGE-DSH.md 为准。
 
+消息交付有两种形态：一是给 AI 在对话里读，默认 lite 档，每条只有 id、时间、发送者、正文与媒体；二是给脚本批量处理，走 CLI，默认 NDJSON 一行一条。要看 ID、类型与发送者映射时传 detail="full"，排查时传 detail="raw" 拿原始 XML。
+
+## 命令行
+
+MCP 是同参同义的薄壳，脚本场景直接用 CLI，默认输出 NDJSON，接管道与循环最省事：
+
+```powershell
+python -m src.cli messages --targets 某群 --start 2026-11-01 --limit 100
+python -m src.cli list --scope group --sort members --limit 20 --json
+python -m src.cli groups --members 甲 乙 --json
+python -m src.cli messages --targets 某群 --format text
+python -m src.cli export --targets 某群 --format md --out exports/mine
+```
+
 ## 快速开始（Windows）
 
 环境：Windows 10 与 11、微信 4.x 已登录、Python 3.11 以上、uv。
