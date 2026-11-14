@@ -57,7 +57,13 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 
 ## 三、MCP 工具
 
-七个工具：list_entities、get_messages、relations、search、sync、list_moments、list_favorites。所有返回都带 data_cutoff（数据截止时间）与 refresh（本次刷新情况）。
+八个工具：start、list_entities、get_messages、relations、search、sync、list_moments、list_favorites。查询类工具返回 data_cutoff（该数据源最后写入时间）与 refresh（本次刷新情况）。
+
+### start
+
+入口工具，新会话先调它。返回完整使用说明（guide 字段）与当前数据状态（state、data_cutoff、库数、联系人、群、索引行数）。
+
+平台无关：任何 MCP 客户端都能调，不依赖特定宿主的引导能力。换平台时只要客户端支持 MCP，这个工具就能告诉你该怎么用。
 
 ### list_entities
 

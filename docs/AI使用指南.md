@@ -2,7 +2,9 @@
 
 给接手的 AI 看的说明书：这个工具能干什么、怎么用、复杂需求怎么编排。
 
-简短版已在 MCP 的 instructions 里，每次连接自动下发；本文件是完整版，含代码示例与任务配方。
+简短版已在 MCP 的 instructions 里每次连接自动下发；也可以直接调 start 工具，它返回同一份说明加当前数据状态。本文件是完整版，含代码示例与任务配方。
+
+start 工具是平台无关的入口：不依赖 DSH 的 mcp_load，任何 MCP 客户端调它都能拿到用法。换平台时先调 start。
 
 ## 一、这是什么
 
@@ -24,6 +26,7 @@ MCP 已在客户端注册为 stdio 模式，直接 mcp_load 即可，不需要�
 
 | 工具 | 干什么 | 关键参数 |
 |---|---|---|
+| start | 入口：返回说明书与数据状态 | 无 |
 | list_entities | 列会话、联系人或群 | scope、keyword、since_days、only_group、only_unread、min_members、max_members、sort、limit、offset |
 | get_messages | 读某个会话的消息 | targets、sender、start_date、end_date、types、keyword、order、limit、cursor、include_media、extract_media、output、output_dir、format |
 | relations | 四种关系查询 | kind、subject、targets、since_date、until_date、limit |
