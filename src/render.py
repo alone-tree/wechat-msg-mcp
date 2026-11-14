@@ -33,7 +33,7 @@ def message_line(m: dict, chat: str = "") -> str:
     first = f"{head}{who}: {body}" if body else f"{head}{who}:"
     lines = first.split("\n")
     out = [lines[0]]
-    out.extend(INDENT + line.rstrip() for line in lines[1:])
+    out.extend((INDENT + line.rstrip()) if line.strip() else "" for line in lines[1:])
     media = m.get("media")
     if isinstance(media, dict) and media.get("path"):
         out.append(INDENT + f"path: {media['path']}")
@@ -55,9 +55,9 @@ def _sections(rows: list[dict], default_chat: str) -> list[tuple[str, list[dict]
 def _summary(obj: dict) -> str:
     total = obj.get("total")
     returned = obj.get("returned", len(obj.get("messages") or []))
-    more = "是" if obj.get("has_more") else "否"
+    more = "还有更多" if obj.get("has_more") else "已到末尾"
     cut = obj.get("data_until") or ""
-    parts = [f"本次 {returned} 条", f"命中 {total} 条" if total is not None else "", f"还有更多 {more}"]
+    parts = [f"本次 {returned} 条", f"命中 {total} 条" if total is not None else "", more]
     if cut:
         parts.append(f"数据截至 {cut}")
     return "，".join(p for p in parts if p)

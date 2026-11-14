@@ -40,7 +40,7 @@ def test_text_render_groups_by_chat_and_indents_continuation():
     assert "=== 另一个群（1 条）===" in text
     assert "[2026-11-14 10:01:00] 李四: 第一行" in text
     assert "\n  第二行" in text
-    assert "本次 3 条，命中 120 条，还有更多 是" in text
+    assert "本次 3 条，命中 120 条，还有更多" in text
 
 
 def test_text_render_keeps_media_path():
