@@ -54,6 +54,14 @@ def cleanup(max_age_hours: float = RUN_RETENTION_HOURS) -> dict:
     if not root.exists():
         return {"removed_files": 0, "removed_dirs": 0}
     cutoff = time.time() - max_age_hours * 3600
+    # 根目录下散落的旧文件：旧版本直接把导出写在 exports/ 里，一并按时间清掉
+    for f in sorted(root.iterdir()):
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed_files += 1
+        except OSError:
+            pass
     for d in sorted(root.glob("run-*")):
         if not d.is_dir():
             continue
