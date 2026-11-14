@@ -74,20 +74,33 @@ def _voice_blob(src: LocalSource, chat_id: str, local_id: int) -> Optional[bytes
     return None
 
 
-def voice_transcript(src: LocalSource, row: dict) -> Optional[str]:
-    """语音消息转文字。取不到音频或转写失败返回 None。"""
+def voice_transcript(src: LocalSource, row: dict) -> tuple[Optional[str], Optional[bytes]]:
+    """语音消息转文字，同时把原始音频字节返回给调用方。
+
+    取不到音频或转写失败时文字为 None；音频字节原样返回，供需要时落盘。
+    """
     blob = _voice_blob(src, row.get("chat_id", ""), int(row.get("local_id") or 0))
     if not blob:
-        return None
+        return None, None
     from .db import voice as voice_mod
 
     try:
         text, duration = voice_mod.transcribe_voice_blob(blob, str(media_dir(src)))
     except Exception:
-        return None
+        return None, blob
     media = row.get("media") or {}
     if duration and not media.get("duration"):
         media["duration"] = duration
     media["transcribed"] = bool(text)
     row["media"] = media
-    return text or None
+    return (text or None), blob
+
+
+def save_voice(blob: bytes, out_dir) -> dict:
+    """保存语音原始音频（微信为 SILK 格式，扩展名 .silk）。"""
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"voice-{hashlib.md5(blob).hexdigest()[:16]}.silk"
+    if not path.exists():
+        path.write_bytes(blob)
+    return {"path": str(path), "bytes": len(blob)}

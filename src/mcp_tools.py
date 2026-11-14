@@ -74,6 +74,70 @@ def _respond(
     return text
 
 
+FILE_EXPORT_MAX_BYTES = 100 * 1024 * 1024
+FILE_EXPORT_MAX_COUNT = 20
+
+
+def _export_files(obj: dict, target) -> dict:
+    """把消息里已定位到的文件（PDF、表格、文档等）复制到导出目录。
+
+    AI 拿到的是副本路径，可直接读；源文件仍在微信目录。
+    """
+    from . import media_files
+
+    msgs = obj.get("messages") or []
+    done = skipped = 0
+    total = 0
+    for m in msgs:
+        media = m.get("media")
+        if not isinstance(media, dict) or media.get("kind") != "file":
+            continue
+        if not media.get("path") or not media.get("exists"):
+            continue
+        if done >= FILE_EXPORT_MAX_COUNT:
+            skipped += 1
+            continue
+        new = media_files.export_copy(media, Path(target), FILE_EXPORT_MAX_BYTES)
+        if new is not None and new.get("exported"):
+            m["media"] = new
+            done += 1
+            total += int(new.get("size") or 0)
+        else:
+            if new is not None:
+                m["media"] = new
+            skipped += 1
+    return {"exported": done, "skipped": skipped, "dir": str(target), "bytes": total}
+
+
+def _export_videos(obj: dict, target) -> dict:
+    """把视频原始文件复制到导出目录（仅 extract_media 时用）。"""
+    from . import media_files
+
+    done = skipped = 0
+    for m in obj.get("messages") or []:
+        media = m.get("media")
+        if not isinstance(media, dict) or media.get("kind") != "video":
+            continue
+        vp = media.get("video_path")
+        if not vp:
+            continue
+        info = {
+            "kind": "video",
+            "name": Path(vp).name,
+            "size": int(media.get("video_size") or 0),
+            "path": vp,
+            "exists": True,
+        }
+        new = media_files.export_copy(info, Path(target), FILE_EXPORT_MAX_BYTES)
+        if new is not None and new.get("exported"):
+            media["video_source_path"] = vp
+            media["video_path"] = new["path"]
+            done += 1
+        else:
+            skipped += 1
+    return {"exported": done, "skipped": skipped, "dir": str(target)}
+
+
 def _save_images(obj: dict, images: list, src, target=None) -> int:
     """把图片字节全部落盘，并把路径回填到对应消息的 media。返回落盘张数。"""
     if not images:
@@ -84,7 +148,10 @@ def _save_images(obj: dict, images: list, src, target=None) -> int:
     by_id = {m.get("local_id"): m for m in obj.get("messages") or []}
     saved = 0
     for img in images:
-        info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), out_dir)
+        if img.get("kind") == "voice":
+            info = media_inline.save_voice(img["bytes"], Path(target).parent / "voice" if target else export.run_dir() / "voice")
+        else:
+            info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), out_dir)
         m = by_id.get(img.get("local_id"))
         if m is not None and isinstance(m.get("media"), dict):
             m["media"]["path"] = info["path"]
@@ -103,6 +170,8 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
     used = 0
     overflow: list = []
     for img in images:
+        if img.get("kind") == "voice":
+            continue
         size = len(img["bytes"])
         if used + size <= INLINE_IMAGE_BUDGET:
             used += size
@@ -234,14 +303,27 @@ def register(mcp, get_service) -> None:
             cursor=cursor,
             include_media=include_media,
         )
+        from . import export as export_mod
+
+        files = _export_files(obj, export_mod.run_dir() / "files")
+        if files["exported"] or files["skipped"]:
+            obj["file_export"] = files
         images = obj.pop("_images", None) or []
 
         if extract_media and images:
             from . import export as export_mod
 
-            target = export_mod.run_dir() / "media" if extract_media == "auto" else Path(extract_media)
+            target = export_mod.run_dir() / "media" if extract_media == "auto" else Path(extract_media) / "media"
             saved = _save_images(obj, images, svc.src, target)
             obj["media_extract"] = {"saved": saved, "dir": str(target)}
+
+        if extract_media:
+            from . import export as export_mod
+
+            vtarget = export_mod.run_dir() / "video" if extract_media == "auto" else Path(extract_media) / "video"
+            vres = _export_videos(obj, vtarget)
+            if vres["exported"] or vres["skipped"]:
+                obj.setdefault("media_extract", {})["video"] = vres
 
         if not images:
             return _respond(obj, "messages", ("messages",), output, format, output_dir)

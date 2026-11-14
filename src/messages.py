@@ -201,7 +201,18 @@ def _media(src: LocalSource, text: str, type_name: str, subtype: Optional[str], 
         return {"kind": "voice", "duration": (int(m.group(1)) // 1000) if m else None}
     if type_name == "video":
         m = _VIDEO_LEN.search(text or "")
-        return {"kind": "video", "duration": int(m.group(1)) if m else None}
+        info = {"kind": "video", "duration": int(m.group(1)) if m else None}
+        try:
+            from .media_files import resolve_video
+
+            v = resolve_video(text or "")
+            if v:
+                info["video_path"] = v.get("path", "")
+                info["video_exists"] = bool(v.get("exists"))
+                info["video_size"] = int(v.get("size") or 0)
+        except Exception:
+            pass
+        return info
     if type_name == "emoticon":
         return {"kind": "emoticon"}
     return None
@@ -462,9 +473,18 @@ def list_messages(
             if kind == "voice":
                 if media_budget["voice"] > 0:
                     media_budget["voice"] -= 1
-                    text = media_inline.voice_transcript(src, row)
+                    text, blob = media_inline.voice_transcript(src, row)
                     if text:
                         row["voice_text"] = text
+                    if blob:
+                        images.append(
+                            {
+                                "local_id": row["local_id"],
+                                "kind": "voice",
+                                "source": "silk",
+                                "bytes": blob,
+                            }
+                        )
             else:
                 data, source = media_inline.image_bytes_for(row, row.get("_raw", ""))
                 if data:
