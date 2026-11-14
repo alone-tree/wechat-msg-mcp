@@ -1,174 +1,59 @@
 #!/usr/bin/env python3
+"""快速解密：用 keys.json 里的密钥刷新 decrypted/。
+
+实现已移到 src/decrypt.py，本脚本只是命令行外壳。
+默认只解源库比副本新的库（增量），加 --full 全量重解。
 """
-快速解密脚本：直接用 keys.json 里已有的密钥解密，不需要管理员权限，不扫描内存。
-适用于密钥已知、只需要更新解密文件的场景。
-"""
-import hashlib
-import hmac
-import json
-import os
-import re
-import sqlite3
-import struct
+import argparse
 import sys
 from pathlib import Path
 
-try:
-    from Crypto.Cipher import AES
-except ImportError:
-    print("❌ 缺少 pycryptodome，请运行：uv sync")
-    sys.exit(1)
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-PROJECT_ROOT = Path(__file__).parent.parent
-KEYS_FILE    = PROJECT_ROOT / "keys.json"
-# 与 start.ps1 / decrypt_standalone.py 对齐：优先读 WECHAT_DECRYPTED_DIR 环境变量
-_OUTPUT_DIR_ENV = os.environ.get("WECHAT_DECRYPTED_DIR", "").strip()
-OUTPUT_DIR   = Path(_OUTPUT_DIR_ENV) if _OUTPUT_DIR_ENV else (PROJECT_ROOT / "decrypted")
-
-PAGE_SIZE    = 4096
-SALT_SIZE    = 16
-KEY_SIZE     = 32
-IV_SIZE      = 16
-HMAC_SIZE    = 64
-RESERVE_SIZE = IV_SIZE + HMAC_SIZE
-PBKDF2_ITER  = 256000
-SQLITE_MAGIC = b"SQLite format 3\x00"
+from src import decrypt
+from src.config import get_db_storage, get_decrypted_dir, get_wechat_files_dir
 
 
-def decrypt_file(src: Path, key_hex: str, dst: Path) -> bool:
-    key_bytes = bytes.fromhex(key_hex)
-    data = src.read_bytes()
+def main() -> int:
+    parser = argparse.ArgumentParser(description="用已保存密钥解密微信数据库")
+    parser.add_argument("--full", action="store_true", help="全量重解，忽略 mtime 判断")
+    args = parser.parse_args()
 
-    if len(data) < PAGE_SIZE:
-        return False
-    if data.startswith(SQLITE_MAGIC):
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(data)
-        return True
+    keys_file = ROOT / "keys.json"
+    if not keys_file.exists():
+        print(f"找不到 {keys_file}，请先运行 scripts/decrypt_standalone.py 生成密钥")
+        return 1
 
-    salt     = data[:SALT_SIZE]
-    mac_salt = bytes(b ^ 0x3A for b in salt)
-    page1    = data[:PAGE_SIZE]
-    data_end = PAGE_SIZE - RESERVE_SIZE + IV_SIZE
-    stored   = page1[PAGE_SIZE - HMAC_SIZE: PAGE_SIZE]
+    files_dir = get_wechat_files_dir()
+    if files_dir is None:
+        print("找不到微信数据目录，请设置环境变量 WECHAT_FILES_DIR")
+        return 1
 
-    # 试 raw enc_key
-    mac_key = hashlib.pbkdf2_hmac("sha512", key_bytes, mac_salt, 2, dklen=KEY_SIZE)
-    h = hmac.new(mac_key, page1[SALT_SIZE: data_end], hashlib.sha512)
-    h.update(struct.pack("<I", 1))
-    if hmac.compare_digest(h.digest(), stored):
-        enc_key = key_bytes
-    else:
-        # passphrase 方式
-        enc_key  = hashlib.pbkdf2_hmac("sha512", key_bytes, salt, PBKDF2_ITER, dklen=KEY_SIZE)
-        mac_key2 = hashlib.pbkdf2_hmac("sha512", enc_key, mac_salt, 2, dklen=KEY_SIZE)
-        h2 = hmac.new(mac_key2, page1[SALT_SIZE: data_end], hashlib.sha512)
-        h2.update(struct.pack("<I", 1))
-        if not hmac.compare_digest(h2.digest(), stored):
-            return False
+    db_storage = get_db_storage(files_dir)
+    if db_storage is None:
+        print(f"{files_dir} 下没有账号目录包含 db_storage")
+        return 1
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    total_pages = len(data) // PAGE_SIZE
+    out = get_decrypted_dir()
+    print(f"使用 {keys_file.name}")
+    print(f"源目录: {db_storage}")
+    print(f"输出目录: {out}")
+    print()
 
-    with open(dst, "wb") as out:
-        for page_no in range(total_pages):
-            page  = data[page_no * PAGE_SIZE: (page_no + 1) * PAGE_SIZE]
-            offset = SALT_SIZE if page_no == 0 else 0
-            iv    = page[PAGE_SIZE - RESERVE_SIZE: PAGE_SIZE - RESERVE_SIZE + IV_SIZE]
-            enc   = page[offset: PAGE_SIZE - RESERVE_SIZE]
-            dec   = AES.new(enc_key, AES.MODE_CBC, iv).decrypt(enc)
-            if page_no == 0:
-                out.write(SQLITE_MAGIC)
-                out.write(dec)
-            else:
-                out.write(dec)
-            out.write(b"\x00" * RESERVE_SIZE)
-
-    try:
-        conn = sqlite3.connect(f"file:{dst}?mode=ro&immutable=1", uri=True)
-        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        conn.close()
-        return True
-    except Exception:
-        try:
-            dst.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return False
-
-
-def main():
-    if not KEYS_FILE.exists():
-        print(f"❌ 找不到 {KEYS_FILE}，请先运行 decrypt_standalone.py 生成密钥")
-        sys.exit(1)
-
-    with open(KEYS_FILE, encoding="utf-8") as f:
-        keys = json.load(f)
-
-    print(f"使用 keys.json（{len(keys)} 条密钥）")
-    print(f"输出目录: {OUTPUT_DIR}\n")
-
-    # 找 xwechat_files，优先读环境变量
-    env_path = os.environ.get("WECHAT_FILES_DIR", "").strip()
-    if env_path and Path(env_path).exists():
-        xwechat_base = Path(env_path)
-    else:
-        xwechat_base = Path.home() / "Documents" / "xwechat_files"
-
-    if not xwechat_base.exists():
-        print(f"❌ 找不到 xwechat_files: {xwechat_base}")
-        print("   请设置环境变量 WECHAT_FILES_DIR 指定路径")
-        sys.exit(1)
-
-    wxid_dirs = sorted(
-        [d for d in xwechat_base.iterdir() if d.is_dir() and (d / "db_storage").exists()],
-        key=lambda p: p.stat().st_mtime, reverse=True
+    result = decrypt.refresh(db_storage, out, keys_file, only_changed=not args.full)
+    for rel in result["changed"]:
+        print(f"  解密 {rel}")
+    for rel in result["failed"]:
+        print(f"  失败 {rel}")
+    print()
+    print(
+        f"检查 {result['checked']} 个库，重新解密 {len(result['changed'])} 个，"
+        f"失败 {len(result['failed'])} 个，耗时 {result['seconds']} 秒"
     )
-    if not wxid_dirs:
-        print("❌ 找不到账号目录")
-        sys.exit(1)
-
-    db_storage = wxid_dirs[0] / "db_storage"
-    print(f"账号目录: {wxid_dirs[0].name}")
-
-    dbs = [
-        p for p in db_storage.rglob("*.db")
-        if p.stat().st_size >= PAGE_SIZE
-        and p.name not in {"key_info.db"}
-        and "fts" not in p.name.lower()
-    ]
-    print(f"找到 {len(dbs)} 个数据库\n")
-
-    success = fail = 0
-    for src in sorted(dbs):
-        rel = src.relative_to(db_storage)
-        dst = OUTPUT_DIR / rel
-
-        # 找对应密钥 - 所有 db 用同一个 passphrase（key 前64位），只是 salt 不同
-        # 直接取第一个 key 的前64位作为 passphrase
-        key_hex = None
-        for v in keys.values():
-            m = re.match(r"x'([0-9a-fA-F]{64})", str(v))
-            if m:
-                key_hex = m.group(1)
-                break
-
-        if not key_hex:
-            print(f"  ⚠️  {rel}: 没有对应密钥，跳过")
-            continue
-
-        size_kb = src.stat().st_size // 1024
-        print(f"  {str(rel):45s} ({size_kb:>6} KB) ...", end=" ", flush=True)
-        ok = decrypt_file(src, key_hex, dst)
-        print("✅" if ok else "❌")
-        if ok:
-            success += 1
-        else:
-            fail += 1
-
-    print(f"\n完成：✅{success}  ❌{fail}")
-    print("\n重启 MCP Server 即可读取最新数据")
+    return 0 if result["ok"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

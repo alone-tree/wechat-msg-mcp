@@ -175,16 +175,19 @@ def register(mcp, get_service) -> None:
         )
 
     @mcp.tool()
-    def sync(action: str = "status", force: bool = False) -> str:
-        """查看数据新鲜度或刷新解密数据与索引。
+    def sync(action: str = "status", force: bool = True) -> str:
+        """查看数据新鲜度，或立即刷新解密数据与索引。
+
+        其余查询工具会自动按 TTL（默认 60 秒）刷新，无需手动调用；
+        需要绕过 TTL 立刻拉最新时用本工具。
 
         Args:
             action: status 只看状态，sync 执行刷新
-            force: 保留参数，当前刷新总是执行
+            force: 忽略 TTL，默认 True；传 False 则受 TTL 约束
         """
         svc = get_service()
         if action == "sync":
-            return _dumps(svc.refresh())
+            return _dumps(svc.refresh(force=force))
         return _dumps(svc.status())
 
     @mcp.tool()

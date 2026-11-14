@@ -27,17 +27,37 @@ uv sync
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-首次运行会检测 decrypted/ 是否存在：不存在则提取密钥并全量解密；存在则用已有密钥增量刷新，然后启动服务，监听 http://localhost:18907/mcp。
+首次运行会检测 decrypted/ 是否存在：不存在则提取密钥并全量解密；存在则只解源库比副本新的部分。刷新完不进常驻服务，直接用下面的 stdio 配置接入。
 
-日常刷新只在需要最新消息时执行：
+想提前把数据刷到最新时重跑一次即可（增量，日常一两秒）：
 
 ```powershell
 uv run python scripts\quick_decrypt.py
 ```
 
-服务端口是 18907。若被占用，改 start.ps1 末尾的端口，并同步更新客户端里的 URL。
+需要常驻 HTTP 服务时加 -Serve，监听 http://localhost:18907/mcp。
 
 ## 接入客户端
+
+推荐 stdio：客户端自己拉起进程，不用预热、不占端口。
+
+```json
+{
+  "mcpServers": {
+    "wechat-msg-mcp": {
+      "command": "D:\\Github\\wechat-msg-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "src.server", "--transport", "stdio"],
+      "cwd": "D:\\Github\\wechat-msg-mcp",
+      "env": {
+        "WECHAT_FILES_DIR": "F:\\xwechat_files",
+        "WECHAT_DECRYPTED_DIR": "D:\\Github\\wechat-msg-mcp\\decrypted"
+      }
+    }
+  }
+}
+```
+
+也可以用常驻 HTTP 服务（需先 start.ps1 -Serve）：
 
 ```json
 {

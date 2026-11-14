@@ -156,3 +156,37 @@ def get_account_wxid() -> str:
         if d.name.startswith("wxid_"):
             return d.name
     return ""
+
+
+def get_wechat_files_dir() -> Optional[Path]:
+    """定位微信数据根目录。
+
+    优先级：WECHAT_FILES_DIR 环境变量 > 常见路径探测。
+    找不到返回 None，调用方据此跳过自动刷新而不是报错。
+    """
+    env_val = os.environ.get("WECHAT_FILES_DIR", "").strip()
+    if env_val:
+        p = Path(env_val).expanduser()
+        return p if p.exists() else None
+    for cand in ("F:/xwechat_files", "D:/xwechat_files", "E:/xwechat_files"):
+        p = Path(cand)
+        if p.is_dir():
+            return p
+    p = Path.home() / "Documents" / "xwechat_files"
+    return p if p.is_dir() else None
+
+
+def get_db_storage(files_dir: Path) -> Optional[Path]:
+    """返回最近活跃账号的 db_storage。"""
+    try:
+        dirs = [
+            d for d in files_dir.iterdir()
+            if d.is_dir() and (d / "db_storage").exists()
+        ]
+    except OSError:
+        return None
+    if not dirs:
+        return None
+    dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return dirs[0] / "db_storage"
+

@@ -1,9 +1,8 @@
-﻿$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "WARNING: Not running as Administrator." -ForegroundColor Yellow
-    Write-Host "Automatic key refresh will not work without admin rights." -ForegroundColor Yellow
-    Write-Host ""
-}
+﻿param([switch]$Serve)
+
+# 2026-11-14：MCP 改为 stdio 模式，默认只刷新数据不进常驻服务。
+# 用 -Serve 才起 HTTP 服务（兼容旧用法与其它客户端）。
+
 $uvPath = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
 if ($PSScriptRoot -ne $null -and $PSScriptRoot -ne "") {
     $projectDir = $PSScriptRoot
@@ -11,18 +10,16 @@ if ($PSScriptRoot -ne $null -and $PSScriptRoot -ne "") {
     $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 }
 
-# 可选：自定义微信数据目录（新机器路径不同时设置）
+# 微信数据目录：换机器时改这里
 $env:WECHAT_FILES_DIR = "F:\xwechat_files"
-
-# 解密输出目录：2026-10-16 起统一用项目内 decrypted（与 keys.json、服务读取目录一致）。
-# 旧外部目录 D:\Github\wechat-msg-mcp-data\decrypted 是 9 月 12 日的过期快照，已弃用。
+# 解密输出目录：与 keys.json、服务读取目录一致
 $env:WECHAT_DECRYPTED_DIR = Join-Path $projectDir "decrypted"
 
-$decryptedDir = if ($env:WECHAT_DECRYPTED_DIR) { $env:WECHAT_DECRYPTED_DIR } else { Join-Path $projectDir "decrypted" }
+$decryptedDir = $env:WECHAT_DECRYPTED_DIR
 $contactDb = Join-Path $decryptedDir "contact\contact.db"
 if (-not (Test-Path $contactDb)) {
-    Write-Host "First run detected, decrypting databases..." -ForegroundColor Cyan
-    Write-Host "This may take a minute. Please wait." -ForegroundColor Cyan
+    Write-Host "First run detected, decrypting all databases..." -ForegroundColor Cyan
+    Write-Host "Needs Administrator and WeChat running. May take a minute." -ForegroundColor Cyan
     Write-Host ""
     & $uvPath --directory $projectDir run python scripts\decrypt_standalone.py
     if ($LASTEXITCODE -ne 0) {
@@ -30,26 +27,35 @@ if (-not (Test-Path $contactDb)) {
         pause
         exit 1
     }
-    Write-Host ""
     Write-Host "Decryption complete." -ForegroundColor Green
-    Write-Host ""
 }
 elseif (Test-Path (Join-Path $projectDir "keys.json")) {
-    # 每次启动自动刷新：用已保存的密钥重新解密最新数据（无需管理员，微信开着效果最好）
-    Write-Host "Auto-refreshing decrypted data with saved keys (quick_decrypt)..." -ForegroundColor Cyan
+    Write-Host "Refreshing decrypted data (incremental)..." -ForegroundColor Cyan
     & $uvPath --directory $projectDir run python scripts\quick_decrypt.py
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Auto-refresh failed (non-fatal), serving existing decrypted data." -ForegroundColor Yellow
+        Write-Host "Refresh failed (non-fatal), serving existing data." -ForegroundColor Yellow
     }
-    Write-Host ""
 }
+else {
+    Write-Host "keys.json not found, cannot refresh. Run scripts\decrypt_standalone.py first." -ForegroundColor Yellow
+}
+
+Write-Host ""
 Write-Host "Updating search index (incremental)..." -ForegroundColor Cyan
 & $uvPath --directory $projectDir run python -m src.cli index
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Index update failed (non-fatal), search may be stale." -ForegroundColor Yellow
 }
-Write-Host ""
-Write-Host "Starting WeChat MCP Server on http://localhost:18907/mcp ..."
-Write-Host "Press Ctrl+C to stop."
-Write-Host ""
-& $uvPath --directory $projectDir run python -m src.server --transport streamable-http --host 0.0.0.0 --port 18907
+
+if ($Serve) {
+    Write-Host ""
+    Write-Host "Starting persistent HTTP server on http://127.0.0.1:18907/mcp ..." -ForegroundColor Cyan
+    Write-Host "Press Ctrl+C to stop." -ForegroundColor Cyan
+    Write-Host ""
+    & $uvPath --directory $projectDir run python -m src.server --transport streamable-http --host 127.0.0.1 --port 18907
+}
+else {
+    Write-Host ""
+    Write-Host "Data refreshed. MCP runs in stdio mode: the client spawns it on demand, no server needed." -ForegroundColor Green
+    Write-Host "Add -Serve if you want the persistent HTTP server instead." -ForegroundColor Gray
+}

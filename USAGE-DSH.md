@@ -1,27 +1,59 @@
 # 使用说明
 
-五个 MCP 工具加一个同构 CLI，全部只读。新会话或首次接入先读 AGENTS.md。
+七个 MCP 工具加一个同构 CLI，全部只读。新会话或首次接入先读 AGENTS.md。
 
 ## 一、启动
+
+2026-11-14 起改为 stdio：不需要预先跑任何脚本，AI 端 mcp_load 时由客户端自己拉起进程（实测约 1 秒），也不再占用端口。
+
+只有想把数据提前刷到最新时才需要跑：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-脚本做三件事：用 keys.json 刷新解密数据、增量更新全文索引、在 18907 端口起 MCP 服务。看到 Application startup complete 即就绪。
+它现在只做两件事：用 keys.json 增量解密变化过的库、增量更新全文索引。它不再常驻服务。
+
+需要常驻 HTTP 服务（例如其它客户端要连 18907）时：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1 -Serve
+```
 
 日常手动刷新：
 
 ```powershell
-uv run python scripts\quick_decrypt.py
-uv run python -m src.cli index
+uv run python scripts\quick_decrypt.py          # 增量，只解变化过的库
+uv run python scripts\quick_decrypt.py --full   # 全量重解，约 10 秒
+uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 sync 同源
 ```
 
-服务端口 18907，检查：Get-NetTCPConnection -LocalPort 18907 -State Listen
+## 二、数据新鲜度
+
+查询类工具在调用前会自动增量刷新，不需要手动干预。
+
+| 项 | 默认 | 说明 |
+|---|---|---|
+| 刷新间隔 | 60 秒 | 环境变量 WECHAT_REFRESH_TTL 调整；设 0 则每次查询都刷；设负数关闭自动刷新 |
+| 增量范围 | mtime 比副本新的库 | 日常几个库约 0.5 到 2.5 秒；全量 32 库约 10 秒 |
+| 失败处理 | 降级不阻断 | 刷新出错照常返回现有数据，原因写在 refresh 字段 |
+| 强制刷新 | sync(action="sync") | 或 CLI 加 --fresh |
+
+返回里的 refresh 字段说明本次做了什么：
+
+| 字段 | 含义 |
+|---|---|
+| refreshed | 本次是否执行了刷新 |
+| skipped | 没刷的原因：ttl、locked、disabled、no_source、error |
+| changed_dbs | 实际重新解密的库 |
+| seconds | 刷新耗时 |
+| ttl_left | 距下次允许刷新的秒数 |
+
+注意：微信自身的 WAL 还没 checkpoint 的内容，任何文件级解密都读不到。所以「最新」指的是最近一次落盘的快照。
 
 ## 二、MCP 工具
 
-五个工具：list_entities、get_messages、relations、search、sync，另有 list_moments 与 list_favorites。所有返回都带 data_cutoff（数据截止时间）。
+七个工具：list_entities、get_messages、relations、search、sync、list_moments、list_favorites。所有返回都带 data_cutoff（数据截止时间）与 refresh（本次刷新情况）。
 
 ### list_entities
 
@@ -78,7 +110,7 @@ inline 模式下若返回超过 80 KB 或 200 条，会自动落盘并在 auto_e
 
 ### sync
 
-action=status 返回数据截止时间、库文件 mtime、联系人、群、索引行数；action=sync 调 quick_decrypt 刷新并增量更新索引（需要 WECHAT_FILES_DIR）。
+action=status 返回数据截止时间、库文件 mtime、联系人、群、索引行数，以及 TTL 剩余；action=sync 立即刷新解密数据与索引，force 默认 true。其余查询工具已自动刷新，这个工具用于显式要求立刻拉最新。
 
 ### list_moments
 
@@ -112,6 +144,13 @@ wechatq resolve 旧群名
 ```
 
 未安装到环境时用 python -m src.cli 调用同一套命令。加 --json 输出结构化结果。
+
+刷新开关（所有子命令通用）：
+
+| 参数 | 作用 |
+|---|---|
+| --fresh | 无视 TTL，执行前先刷一次 |
+| --no-fresh | 本次不自动刷新，用现有数据（适合脚本连续跑多条） |
 
 ## 四、索引
 

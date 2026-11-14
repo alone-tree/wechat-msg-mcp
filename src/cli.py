@@ -17,7 +17,11 @@ def _print(obj, as_json: bool) -> None:
 
 
 def _service(args) -> Service:
-    return Service(args.root or None)
+    auto = not getattr(args, "no_fresh", False)
+    svc = Service(args.root or None, auto_refresh=auto)
+    if getattr(args, "fresh", False):
+        svc.ensure_fresh(force=True)
+    return svc
 
 
 def cmd_list(args) -> int:
@@ -154,9 +158,10 @@ def cmd_status(args) -> int:
 
 
 def cmd_sync(args) -> int:
-    obj = _service(args).refresh()
+    svc = Service(args.root or None, auto_refresh=False)
+    obj = svc.refresh(force=True)
     _print(obj, True)
-    return 0 if obj.get("ok") else 1
+    return 0 if obj.get("refreshed") else 1
 
 
 def cmd_index(args) -> int:
@@ -250,6 +255,8 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default="", help="解密目录，默认取 WECHAT_DECRYPTED_DIR 或项目内 decrypted")
     common.add_argument("--json", action="store_true", help="输出 JSON")
+    common.add_argument("--fresh", action="store_true", help="无视 TTL，执行前立即刷新解密数据")
+    common.add_argument("--no-fresh", action="store_true", help="本次不自动刷新，直接用现有数据")
 
     p = argparse.ArgumentParser(prog="wechatq", description="微信聊天记录只读查询 CLI")
     sub = p.add_subparsers(dest="cmd", required=True)

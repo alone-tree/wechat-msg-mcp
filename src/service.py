@@ -8,35 +8,51 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from . import entities, index, messages, relations, search as search_mod, sync as sync_mod
+from . import entities, freshness, index, messages, relations, search as search_mod, sync as sync_mod
 from .db.locator import LocalSource
 
 
 class Service:
-    def __init__(self, root: Optional[str] = None):
+    def __init__(self, root: Optional[str] = None, auto_refresh: bool = True):
         from .config import get_decrypted_dir
 
         self.src = LocalSource(Path(root) if root else get_decrypted_dir())
+        self.auto_refresh = auto_refresh
+
+    def _fresh(self, force: bool = False) -> dict:
+        """查询前的按需刷新，失败不阻断查询。"""
+        if not self.auto_refresh:
+            return {"refreshed": False, "skipped": "disabled"}
+        return freshness.ensure(self.src, force=force)
+
+    def ensure_fresh(self, force: bool = False) -> dict:
+        """对外暴露的刷新入口，供 CLI 的 --fresh 与 sync 工具使用。"""
+        return self._fresh(force)
+
+    def _with_fresh(self, result: dict, force: bool = False) -> dict:
+        if isinstance(result, dict):
+            result["refresh"] = self._fresh(force)
+        return result
 
     # 实体
     def list_entities(self, **kwargs) -> dict:
-        return entities.list_entities(self.src, **kwargs)
+        return self._with_fresh(entities.list_entities(self.src, **kwargs))
 
     def resolve(self, name: str, limit: int = 5) -> dict:
         return entities.resolve_name(self.src, name, limit=limit)
 
     # 消息
     def get_messages(self, **kwargs) -> dict:
-        return messages.list_messages(self.src, **kwargs)
+        return self._with_fresh(messages.list_messages(self.src, **kwargs))
 
     # 关系
     def relations(self, kind: str, subject: str, **kwargs) -> dict:
         if kind == "group_members":
-            return relations.group_members(self.src, subject, limit=kwargs.get("limit", 500))
-        if kind == "common_groups":
-            return relations.common_groups(self.src, subject, limit=kwargs.get("limit", 200))
-        if kind == "person_activity":
-            return relations.person_activity(
+            result = relations.group_members(self.src, subject, limit=kwargs.get("limit", 500))
+        elif kind == "common_groups":
+            result = relations.common_groups(self.src, subject, limit=kwargs.get("limit", 200))
+        elif kind == "person_activity":
+            result = relations.person_activity(
                 self.src,
                 subject,
                 targets=kwargs.get("targets"),
@@ -44,38 +60,42 @@ class Service:
                 until=kwargs.get("until", ""),
                 limit=kwargs.get("limit", 200),
             )
-        if kind == "activity":
-            return relations.activity(
+        elif kind == "activity":
+            result = relations.activity(
                 self.src, subject, since=kwargs.get("since", ""), until=kwargs.get("until", "")
             )
-        return {"error": f"未知关系类型: {kind}"}
+        else:
+            result = {"error": f"未知关系类型: {kind}"}
+        return self._with_fresh(result)
 
     # 搜索
     def search(self, query: str, **kwargs) -> dict:
-        return search_mod.search(self.src, query, **kwargs)
+        return self._with_fresh(search_mod.search(self.src, query, **kwargs))
 
     # 朋友圈与收藏
     def list_moments(self, **kwargs) -> dict:
         from .moments import list_moments
 
-        return list_moments(self.src, **kwargs)
+        return self._with_fresh(list_moments(self.src, **kwargs))
 
     def list_favorites(self, **kwargs) -> dict:
         from .favorites import list_favorites
 
-        return list_favorites(self.src, **kwargs)
+        return self._with_fresh(list_favorites(self.src, **kwargs))
 
     # 同步与索引
     def status(self) -> dict:
         info = sync_mod.status(self.src)
         info["index"] = index.count(self.src)
+        info["refresh"] = {
+            "ttl_seconds": freshness.ttl_seconds(),
+            "ttl_left": freshness.peek_ttl_left(self.src),
+            "last": freshness._read_state(self.src),
+        }
         return info
 
-    def refresh(self) -> dict:
-        result = sync_mod.refresh(self.src)
-        if result.get("ok"):
-            result["index"] = index.update(self.src)
-        return result
+    def refresh(self, force: bool = True) -> dict:
+        return freshness.ensure(self.src, force=force, update_index=True)
 
     def build_index(self, rebuild: bool = False) -> dict:
         return index.build(self.src, rebuild=rebuild)
