@@ -277,5 +277,6 @@ wechatq resolve 旧群名
 - 不指定 targets 的查询默认限最近 30 天，避免全库扫描。
 - 跨群聚合（common_groups、person_activity）以索引中的文本消息为基数，媒体消息不计入。
 - 图片与语音默认就会内联（include_media 默认 true，超过 50 条自动跳过）。从没在微信里打开过的图片，本机只有缩略图甚至什么都没有：有缩略图时会给图并在 media.note 说明，什么都没有时 missing_reason=no_local_image。
+- 云端拉原图暂不可行：聊天图片的 cdnthumburl 是微信私有 TLV，不是 URL，本地库也不存媒体地址；公开资料只有朋友圈那套明文 URL 方案。想看清晰原图就在微信客户端点开一次，文件落盘后重新查询即可。
 - 只解密有 keys.json 密钥的账号。
 - 聊天正文、wxid、群名不写入日志；真实名称只放 private-docs/。
