@@ -154,11 +154,11 @@ wechatq resolve 旧群名
 
 ## 四、索引
 
-索引库 decrypted/_index/search.db，按 (库, 表) 记 local_id 水位，刷新时只补新增。当前规模约 135 万条文本消息、约 400 MB，全量重建约 37 秒，查询毫秒级。
+索引库 decrypted/_index/search.db，按 (库, 表) 记 local_id 水位，刷新时只补新增。当前规模约 135 万条文本消息、约 400 MB，全量重建 37 到 50 秒，查询毫秒级。
 
 重建：wechatq index --rebuild
 
-注意：如果 decrypted/ 被整个删掉，第一次查询会自动全量解密（约 10 秒）并全量建索引（约 37 秒），可能超过客户端单次调用超时。这种场景建议先手动跑一次 quick_decrypt.py 与 wechatq index，再用工具。
+注意：如果 decrypted/ 被整个删掉，第一次查询会自动全量解密（实测 11.7 秒）并全量建索引（实测 49.7 秒），合计约 62 秒，会超过客户端单次调用超时。这种场景建议先手动跑一次 quick_decrypt.py 与 wechatq index，再用工具。
 
 ## 五、排查
 
