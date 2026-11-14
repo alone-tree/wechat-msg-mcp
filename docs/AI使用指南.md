@@ -38,7 +38,7 @@ MCP 已在客户端注册为 stdio 模式，直接 mcp_load 即可，不需要�
 
 ## 四、各类消息怎么读
 
-传 include_media=true 才会处理媒体内容：
+媒体默认就会处理（include_media 默认 true）；返回条数超过 50 时自动跳过，避免为会被裁成预览的结果白做提取：
 
 | 类型 | 返回什么 | 说明 |
 |---|---|---|
@@ -185,7 +185,7 @@ for gid in groups:
 | 想做的事 | 配方 |
 |---|---|
 | 今天有哪些群有新消息 | list_entities(scope="group", since_days=1, sort="last_time") |
-| 某群最近一周的图片和链接 | get_messages(targets=[群], start_date=七天前, types=["image","link"], include_media=true) |
+| 某群最近一周的图片和链接 | get_messages(targets=[群], start_date=七天前, types=["image","link"]) |
 | 某人在哪些群活跃 | relations(kind="person_activity", subject="某人") |
 | 某个词在哪些会话出现过 | search(query="词", scope="message") |
 | 导出某群全年对话 | wechatq export --targets 某群 --start 2025-01-01 --end 2025-12-31 |
