@@ -71,7 +71,7 @@ transfer red_packet location card voip system revoked。
 【读媒体】
 媒体默认就处理（include_media 默认开）。返回条数超过 50 条时自动跳过媒体提取，因为那种量级会被截成预览。
 - 图片、表情：直接内联图片本身，能直接看到图，不用再读文件。
-- 视频：内联封面（media.cover_path），mp4 原件在 media.path。
+- 视频：内联封面图本身；本地有 mp4 时 media.path 指向原件，另给 size 与 exists；要留封面文件用 extract_media。
 - 语音：给转写文字并写进 text，不内联音频；要音频传 extract_media。
 - 链接、小程序、视频号：media.url 可直接打开。转账给 media.amount。红包金额本地不存。
 - 文件：自动复制到导出目录，media.path 是副本路径可直接读，source_path 是微信原路径。
