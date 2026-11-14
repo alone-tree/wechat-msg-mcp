@@ -317,7 +317,7 @@ def register(mcp, get_service) -> None:
         cursor: str = "",
         output: str = "inline",
         format: str = "csv",
-        include_media: bool = False,
+        include_media: bool = True,
         output_dir: str = "",
         extract_media: str = "",
     ) -> list:
@@ -335,7 +335,8 @@ def register(mcp, get_service) -> None:
             cursor: 上一页返回的 next_cursor
             output: inline 直接返回，file 强制落盘
             format: 落盘格式 csv/json/md/html
-            include_media: 图片、表情、视频封面直接内联返回，语音直接给转写文字
+            include_media: 默认开。图片、表情、视频封面直接内联返回，语音给转写文字；
+                返回条数超过 50 条时自动跳过媒体提取（那种量级会被截成预览）
             output_dir: 结果落盘目录，留空写本进程的 exports/run-* 目录
             extract_media: 额外把媒体原文件存到文件；留空不存，auto 存到本进程导出目录，也可传绝对目录
 

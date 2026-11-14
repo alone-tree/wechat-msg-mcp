@@ -105,7 +105,7 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP syst
 | cursor | 上一页的 next_cursor |
 | output | inline（默认）或 file |
 | format | output=file 时的 csv/json/md/html |
-| include_media | true 时图片、表情、视频封面作为图片内容直接内联返回，AI 一次调用就能看到图；语音直接给转写文字 |
+| include_media | 默认 true。图片、表情、视频封面作为图片内容直接内联返回，AI 一次调用就能看到图；语音给转写文字。返回条数超过 50 条时自动跳过媒体提取（那种量级会被截成预览）。传 false 可关闭 |
 | extract_media | 额外把媒体原文件存成文件：留空不存，auto 存到本进程导出目录（图片 media/、语音 voice/、视频 video/），也可传绝对目录 |
 
 文件类消息（PDF、表格、压缩包等）不需要参数：读取时自动复制到本进程 exports/run-*/files/，media.path 给副本路径，source_path 保留微信原路径；单文件限 100MB，单次最多 20 个，超过上限的在 media.note 里说明。

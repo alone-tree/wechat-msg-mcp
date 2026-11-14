@@ -36,6 +36,8 @@ _CDATA_RE = re.compile(r"^\s*<!\[CDATA\[(.*?)\]\]>\s*$", re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _DEFAULT_WINDOW_DAYS = 30
+# 返回条数超过这个数就不提取媒体：会被落盘裁成 3 条预览，提取了也白提
+MEDIA_MAX_ROWS = 50
 
 _TYPE_ALIASES = {
     "text": ["text"],
@@ -462,6 +464,8 @@ def list_messages(
     rows = [item[1] for bucket_rows in heaps.values() for item in bucket_rows]
     rows.sort(key=_sort_key, reverse=(order == "desc"))
     page = rows[:limit]
+    # 条数太多时提取媒体没意义：会被落盘裁成 3 条预览，提取了也白提
+    want_media = include_media and len(page) <= MEDIA_MAX_ROWS
     last_key = _sort_key(page[-1]) if page and matched > len(page) else None
     next_cursor = (
         f"{last_key[0]}|{last_key[1]}|{last_key[2]}|{last_key[3]}" if last_key else None
@@ -475,7 +479,7 @@ def list_messages(
             row["media"] = _media(
                 src, row.get("_raw", ""), row["type"], row["subtype"], row["chat_id"]
             )
-        if include_media and row.get("media"):
+        if want_media and row.get("media"):
             from . import media_inline
 
             kind = (row["media"] or {}).get("kind")
