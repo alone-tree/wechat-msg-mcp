@@ -330,6 +330,9 @@ def register(mcp, get_service) -> None:
             include_media: 图片、表情、视频封面直接内联返回，语音直接给转写文字
             output_dir: 结果落盘目录，留空写本进程的 exports/run-* 目录
             extract_media: 额外把媒体原文件存到文件；留空不存，auto 存到本进程导出目录，也可传绝对目录
+
+        媒体处理会比纯文本查询慢：需要看图时再用 include_media，并尽量配合 types
+        缩小范围（例如 types=["image"]），不要在一次大批量取数里同时开它。
         """
         svc = get_service()
         obj = svc.get_messages(

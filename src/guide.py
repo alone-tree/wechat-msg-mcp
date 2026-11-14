@@ -41,6 +41,8 @@ GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个
 - 转账：给 media.amount 金额与 des。红包：给可打开的 url，金额本地不存。
 - 文件（PDF、表格、压缩包等）：不需要任何参数，读消息时自动复制到导出目录，media.path 就是副本路径，可直接读；source_path 是微信原路径。
 
+媒体处理比纯文本慢：批量取数不要同时开 include_media，需要看图时配合 types 缩小范围（例如 types=["image"]）单独查一次。
+
 体积保护：内联图片总字节超过 6MB 时，超出的不内联，改成落盘并在 media.path 给路径，media_inline.note 会说明还有多少张。
 
 想把媒体原件存成文件时用 extract_media：留空不存，auto 存到导出目录，也可传绝对目录。语音会从微信的 SILK 转成可直接播放的 WAV。
