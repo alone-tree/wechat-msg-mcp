@@ -162,13 +162,16 @@ wechatq resolve 旧群名
 
 | 症状 | 处理 |
 |---|---|
-| MCP 连不上 | 看 18907 是否监听；start.ps1 是否报错 |
+| mcp_load 失败 | 看返回的错误；确认 .venv 里的 python 能跑 `python -m src.server --transport stdio` |
+| 查询比平时慢 | 看返回的 refresh：refreshed=true 说明本次触发了解密，秒数正常 |
+| 数据没更新 | 看 refresh.skipped：ttl 等几十秒；locked 说明另一个进程在刷；no_source 是找不到微信目录；error 看 error 字段 |
 | 搜不到旧消息 | 索引可能未建或过期，跑 wechatq index 后重查 |
-| 数据停在昨天 | 微信未 checkpoint 的 WAL 读不到；切一下聊天窗口或重启微信再刷新 |
+| 数据停在某个时间 | 微信未 checkpoint 的 WAL 读不到；切一下聊天窗口或重启微信再刷新 |
 | 目标名找不到 | 用 wechatq resolve 取候选；群改名后会返回相似名 |
 | 文件消息路径为空 | 该文件可能未落本地；exists=false 时只能等微信下载 |
-| 刷新失败 | 密钥可能失效，用管理员运行 scripts\decrypt_standalone.py |
-| 端口被占用 | 改 start.ps1 末尾端口，并同步客户端 URL |
+| 刷新报密钥错误 | 密钥失效，用管理员运行 scripts\decrypt_standalone.py 重新提取 |
+| 想确认锁没卡死 | 看 decrypted\_index\refresh.lock；超过 120 秒会被视为残留并自动回收 |
+| 端口被占用 | 仅 -Serve 模式有这问题；改端口并同步客户端 URL |
 
 ## 六、已知限制
 

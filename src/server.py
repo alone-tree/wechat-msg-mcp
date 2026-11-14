@@ -1,6 +1,7 @@
 """MCP 服务入口。
 
-五个工具注册在 src/mcp_tools.py，业务逻辑在 src/service.py。
+七个工具注册在 src/mcp_tools.py，业务逻辑在 src/service.py。
+刷新链在 src/freshness.py。默认 stdio，客户端拉起即可用。
 依据 docs/重构方案-2026-11-13.md 第 6 节。
 """
 from __future__ import annotations
@@ -33,10 +34,14 @@ _args = _parse_args()
 mcp = FastMCP(
     name="wechat-msg-mcp",
     instructions=(
-        "微信聊天记录只读查询。五个工具：\n"
+        "微信聊天记录只读查询。七个工具：\n"
         "list_entities 列会话/联系人/群，get_messages 读消息，\n"
-        "relations 查群成员/共同群/跨群发言/活跃统计，search 搜实体与消息，sync 看数据新鲜度。\n"
-        "所有结果带 data_cutoff（数据截止时间）；超出体积的结果请用 output=file 落盘。"
+        "relations 查群成员/共同群/跨群发言/活跃统计，search 搜实体与消息，\n"
+        "sync 看数据新鲜度或强制刷新，list_moments 查朋友圈，list_favorites 查收藏。\n"
+        "查询类工具会自己按 TTL（默认 60 秒）增量刷新解密数据，无需预热脚本；"
+        "返回里的 refresh 字段说明本次是否刷新、解了哪些库、耗时多少，"
+        "skipped=ttl 表示在 TTL 内直接用了现有数据。\n"
+        "所有结果带 data_cutoff（源库最后写入时间）；超出体积的结果请用 output=file 落盘。"
     ),
     host=_args.host,
     port=_args.port,
