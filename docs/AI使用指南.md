@@ -36,6 +36,12 @@ MCP 已在客户端注册为 stdio 模式，直接 mcp_load 即可，不需要�
 
 所有查询类工具都返回 refresh（本次刷新情况）与 data_cutoff（该数据源最后写入时间）。
 
+## 三之半、谁是我
+
+start 与 get_messages 返回里都有 self 字段：id 是账号 wxid，nickname 是微信昵称，alias 是微信号。
+
+每条消息只给 sender_name：自己发的显示「我」，别人发的显示备注优先的名字；direction 为 out 是本人发出。要看具体 wxid 就去结果尾部的 senders 表按名字反查，不必逐条看 ID。
+
 ## 四、各类消息怎么读
 
 媒体默认就会处理（include_media 默认 true）；返回条数超过 50 时自动跳过，避免为会被裁成预览的结果白做提取：

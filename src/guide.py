@@ -16,6 +16,10 @@ search 搜索，list_moments 朋友圈，list_favorites 收藏。
 
 GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个工具，其中 system 是入口。
 
+【账号是谁】
+- system(action="start") 与 get_messages 返回里都有 self 字段：id 是账号 wxid，nickname 是微信昵称，alias 是微信号，note 写明怎么区分。
+- 每条消息只给 sender_name：自己发的显示「我」，别人发的显示备注优先的名字。要看 wxid 去结果尾部的 senders 表按名字反查，不用每条消息重复长 ID。
+
 【默认行为】
 - 调任何查询工具时，服务会自己按 TTL（默认 60 秒）增量刷新解密数据。不需要先跑脚本，也不需要重启服务。
 - 结果里的 refresh 字段说明本次做了什么：refreshed=true 表示刚解了 changed_dbs 里的库；skipped=ttl 表示在 TTL 内直接用了现有数据；locked 表示另一个进程正在刷。

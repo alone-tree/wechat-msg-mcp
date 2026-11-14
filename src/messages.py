@@ -257,6 +257,93 @@ def _my_username() -> str:
         return ""
 
 
+def _self_info(my_user: str, contacts=None, src=None) -> dict:
+    """账号主人信息。AI 靠它区分「我发的」与「别人发的」，不用猜。"""
+    if not my_user:
+        return {
+            "id": "",
+            "nickname": "",
+            "alias": "",
+            "note": "未能识别本机账号，direction 可能不可靠，请勿绝对依赖收发方向",
+        }
+    name, alias = "", ""
+    if contacts is not None:
+        try:
+            name = contacts.name_of(my_user) or ""
+        except Exception:
+            pass
+    if src is not None:
+        conn = None
+        try:
+            from .db.open_ import connect_ro
+
+            conn = connect_ro(src.path("contact"))
+            r = conn.execute(
+                "SELECT remark, nick_name, alias FROM contact WHERE username=?", (my_user,)
+            ).fetchone()
+            if r:
+                name = r["remark"] or r["nick_name"] or name
+                alias = r["alias"] or ""
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+    return {
+        "id": my_user,
+        "nickname": name,
+        "alias": alias,
+        "note": "这个账号就是「我」。direction=out 或 sender_name 显示「我」的都是本人发出，direction=in 是别人发来的",
+    }
+
+
+def _senders_index(src, page: list, contacts) -> dict:
+    """发言人 ID 映射：键是 wxid，值是名字、微信号、是否好友。
+
+    每条消息只给名字（自己发的显示「我」），要拿 wxid 就来这张表按名字反查，
+    避免每条消息重复一长串 ID 把响应撑大。
+    """
+    from .db.open_ import connect_ro
+
+    ids = []
+    seen = set()
+    for m in page:
+        sid = m.get("_sender_id") or ""
+        if sid and sid not in seen:
+            seen.add(sid)
+            ids.append(sid)
+    if not ids:
+        return {}
+
+    info: dict = {}
+    conn = None
+    try:
+        conn = connect_ro(src.path("contact"))
+        for i in range(0, len(ids), 300):
+            chunk = ids[i:i + 300]
+            q = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                f"SELECT username, remark, nick_name, alias, local_type FROM contact WHERE username IN ({q})",
+                chunk,
+            ):
+                rec = {"name": r["remark"] or r["nick_name"] or r["username"]}
+                if r["nick_name"] and r["nick_name"] != rec["name"]:
+                    rec["nickname"] = r["nick_name"]
+                if r["alias"]:
+                    rec["alias"] = r["alias"]
+                rec["friend"] = r["local_type"] == 1
+                info[r["username"]] = rec
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            conn.close()
+
+    for sid in ids:
+        info.setdefault(sid, {"name": contacts.name_of(sid) or sid})
+    return info
+
+
 def _build_row(db: Path, table: str, r, sender_map: dict, my_user: str, contacts: ContactIndex) -> dict:
     text = _content(r["message_content"], r["WCDB_CT_message_content"])
     type_name, subtype = classify(r["local_type"], text)
@@ -276,7 +363,7 @@ def _build_row(db: Path, table: str, r, sender_map: dict, my_user: str, contacts
         "direction": "out" if is_me else "in",
         "type": type_name,
         "subtype": subtype,
-        "sender_id": sid or "",
+        "_sender_id": sid or (my_user if is_me else ""),
         "sender_name": "我" if is_me else (contacts.name_of(sid) or ""),
         "chat_id": "",
         "chat_name": "",
@@ -515,6 +602,8 @@ def list_messages(
                 data, source, reason = media_inline.image_bytes_for(row, row.get("_raw", ""))
                 if data:
                     media.update({"source": source, "bytes": len(data)})
+                    if source == "thumb":
+                        media["note"] = "原图未落盘，返回的是缩略图，字小的长截图可能看不清"
                     images.append(
                         {
                             "local_id": row["local_id"],
@@ -532,12 +621,17 @@ def list_messages(
         row.pop("_tbl", None)
         row.pop("ts", None)
     has_more = matched > len(page)
+    senders_index = _senders_index(src, page, contacts)
+    for row in page:
+        row.pop("_sender_id", None)
     result = {
         "total": matched,
         "returned": len(page),
         "has_more": has_more,
         "next_cursor": next_cursor,
         "default_window_days": default_window,
+        "self": _self_info(my_user, contacts, src),
+        "senders": senders_index,
         "data_cutoff": src.data_cutoff("message"),
         "messages": page,
         "unresolved": unresolved,
@@ -557,7 +651,8 @@ def list_messages(
         result["media_missing"] = media_missing
         if media_missing.get("hardlink_row_missing") or media_missing.get("file_not_on_disk"):
             result.setdefault("warnings", []).append(
-                "部分图片在本地登记库里查不到或未下载（原因见 media.missing_reason）。"
+                "部分图片本机没有原件也没有缩略图（原因见 media.missing_reason，"
+                "no_local_image 表示这张图从未在微信里打开过）。"
                 "登记库副本落后时先 system(action='sync', force=true) 刷新再查，"
                 "看 refresh.failed_detail 确认是否被占用"
             )

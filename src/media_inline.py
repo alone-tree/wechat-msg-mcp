@@ -49,7 +49,7 @@ def image_bytes_for(row: dict, raw_text: str) -> tuple[Optional[bytes], str, str
             raw_text, row.get("chat_id", ""), int(row.get("ts") or 0)
         )
     if kind == "video":
-        cover = image_mod.extract_video_cover(raw_text)
+        cover = image_mod.extract_video_cover(raw_text, int(row.get("ts") or 0))
         return cover, "cover", ("" if cover else "cover_missing")
     blob = image_mod.extract_emoticon_bytes(raw_text)
     return blob, "emoticon", ("" if blob else "emoticon_unavailable")

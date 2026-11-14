@@ -21,6 +21,13 @@ MEDIA_KEYS_PATH = os.path.join(PROJECT_ROOT, "decrypted", "media_keys.json")
 HARDLINK_DB = os.path.join(PROJECT_ROOT, "decrypted", "hardlink", "hardlink.db")
 
 _IMG_MD5_RE = re.compile(r"<md5>([0-9a-f]{32})</md5>")
+_IMG_LEN_RE = re.compile(r'\blength="(\d+)"')
+_THUMB_LEN_RE = re.compile(r'cdnthumblength="(\d+)"')
+_THUMB_WH_RE = re.compile(r'cdnthumbwidth="(\d+)"[^>]*cdnthumbheight="(\d+)"')
+# V2 容器体积 = 明文长度 + 15 字节头 + AES 填充块 + 16 字节偏移段，
+# 实测文件比明文长 31 到 47 字节；先用这个窗口筛，命中就不必再解别的文件。
+_SIZE_MIN, _SIZE_MAX = 31, 47
+_dir_listing: dict = {}
 _IMG_ATTR_MD5_RE = re.compile(r'<img[^>]*\bmd5="([0-9a-f]{32})"')
 _V2_SIG = b"\x07\x08V2\x08\x07"
 
@@ -78,6 +85,118 @@ def _dir_map(conn) -> dict:
         mapping = {}
     _dir_cache = (stamp, mapping)
     return mapping
+
+
+def _month_dirs(create_time: int) -> list[str]:
+    """消息所在年月，前后各补一个月，兼容跨月下载。"""
+    if not create_time:
+        return []
+    out = []
+    for delta in (0, -1, 1):
+        ts = int(create_time) + delta * 30 * 86400
+        out.append(time.strftime("%Y-%m", time.localtime(ts)))
+    return out
+
+
+def _attach_img_dir(chat_id: str, month: str) -> Optional[Path]:
+    import hashlib
+
+    if not chat_id:
+        return None
+    chat_md5 = hashlib.md5(chat_id.encode("utf-8", "ignore")).hexdigest()
+    for attach in _account_dirs():
+        d = attach / chat_md5 / month / "Img"
+        if d.exists():
+            return d
+    return None
+
+
+def _list_sized(directory: Path, pattern: str) -> list:
+    """目录内容按 (路径, 体积) 缓存，目录 mtime 变则重扫。"""
+    try:
+        stamp = directory.stat().st_mtime
+    except OSError:
+        return []
+    key = (str(directory), pattern)
+    cached = _dir_listing.get(key)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    items = []
+    for p in directory.glob(pattern):
+        try:
+            items.append((p, p.stat().st_size))
+        except OSError:
+            continue
+    _dir_listing[key] = (stamp, items)
+    return items
+
+
+def _dims_of(raw: bytes) -> Optional[tuple]:
+    """图片字节的宽高；wxgf 容器先解 HEVC 首帧。"""
+    import io
+
+    if raw[:4] == b"wxgf":
+        raw = decode_wxgf(raw) or b""
+    try:
+        from PIL import Image as PILImage
+
+        with PILImage.open(io.BytesIO(raw)) as im:
+            return im.size
+    except Exception:
+        return None
+
+
+def _pick_by_meta(
+    directories: list,
+    pattern: str,
+    expect_len: int,
+    expect_wh: Optional[tuple],
+    aes_key: Optional[str],
+    xor_key,
+    tol: int = 0,
+) -> Optional[bytes]:
+    """按消息自带的体积与尺寸在本地找文件：不依赖 hardlink 登记表。
+
+    微信 4.x 的登记表可能滞后或改命名策略，但消息 XML 里带着缩略图与原图的
+    明文长度、宽高，拿来和磁盘文件逐一比对就能认出来。
+    """
+    if not expect_len:
+        return None
+    window = (tol, tol) if tol else (_SIZE_MIN, _SIZE_MAX)
+    best = None
+    for directory in directories:
+        if directory is None:
+            continue
+        for path, size in _list_sized(directory, pattern):
+            delta = size - expect_len
+            if delta < window[0] or delta > window[1]:
+                continue
+            try:
+                blob = path.read_bytes()
+            except OSError:
+                continue
+            if aes_key is not None:
+                blob = decrypt_v2_dat(blob, aes_key, xor_key) or b""
+            if len(blob) != expect_len:
+                continue
+            if expect_wh:
+                dims = _dims_of(blob)
+                if dims and tuple(expect_wh) != dims:
+                    continue
+            if best is None or len(blob) > len(best):
+                best = blob
+    return best
+
+
+def _meta_of(content: str) -> tuple:
+    """消息 XML -> (原图长度, 缩略图长度, 缩略图宽高)。"""
+    m_len = _IMG_LEN_RE.search(content or "")
+    m_tlen = _THUMB_LEN_RE.search(content or "")
+    m_wh = _THUMB_WH_RE.search(content or "")
+    length = int(m_len.group(1)) if m_len else 0
+    thumb_len = int(m_tlen.group(1)) if m_tlen else 0
+    wh = (int(m_wh.group(1)), int(m_wh.group(2))) if m_wh else None
+    return length, thumb_len, wh
 
 
 def _account_dirs() -> list[Path]:
@@ -149,8 +268,16 @@ def find_image_dat(content: str) -> Optional[Path]:
     return hits[0] if hits else None
 
 
+_XOR_TABLES: dict = {}
+
+
 def _xor_bytes(data: bytes, key: int) -> bytes:
-    return bytes(b ^ key for b in data)
+    """整段异或。用 translate 表走 C 实现，纯 Python 逐字节在几百 KB 的图上很慢。"""
+    table = _XOR_TABLES.get(key)
+    if table is None:
+        table = bytes(i ^ key for i in range(256))
+        _XOR_TABLES[key] = table
+    return data.translate(table)
 
 
 def _guess_xor_key(tail: bytes) -> Optional[int]:
@@ -435,11 +562,27 @@ def extract_image_meta(
             jpeg = _decode_dat(dat, aes_key, xor_key)
             if jpeg:
                 return jpeg, "thumb", ""
+
+        # 登记表没有时按消息自带长度与宽高在盘上认文件：先原图，再缩略图。
+        # 微信 4.x 的 image_hardlink_info_v4 会滞后，磁盘文件却一直在。
+        length, thumb_len, wh = _meta_of(content)
+        dirs = [_attach_img_dir(chat_username, m) for m in _month_dirs(create_time)]
+        for pattern, expect_len, expect_wh, src in (
+            ("*.dat", length, None, "dat"),
+            ("*_t.dat", thumb_len, wh, "thumb"),
+        ):
+            if not expect_len:
+                continue
+            blob = _pick_by_meta(dirs, pattern, expect_len, expect_wh, aes_key, xor_key)
+            if blob:
+                jpeg = normalize_to_jpeg(blob)
+                if jpeg:
+                    return jpeg, src, ""
     if not aes_key:
         return None, "", reason or "no_image_key"
     if variants:
         return None, "", "decode_failed"
-    return None, "", reason
+    return None, "", "no_local_image"
 
 
 def extract_image_bytes(
@@ -453,20 +596,21 @@ _VIDEO_MD5_RE = re.compile(r'<videomsg[^>]*\bmd5="([0-9a-f]{32})"')
 _VIDEO_DIRS = "video"
 
 
-def extract_video_cover(content: str) -> Optional[bytes]:
+def extract_video_cover(content: str, create_time: int = 0) -> Optional[bytes]:
     """视频消息（type 43）-> 封面 JPEG 字节。
 
     本地封面是明文：msg/video/<年月>/<文件基名>.jpg（另有 _thumb.jpg 更小）。
-    文件名从 hardlink 的 video_hardlink_info_v4 按视频 md5 查得。
+    优先按 hardlink 的 video_hardlink_info_v4 查文件名；查不到时按消息 XML 里的
+    cdnthumblength 与 cdnthumbwidth/height 在目录里比对，不依赖登记表。
     """
     if not content:
         return None
     m = _VIDEO_MD5_RE.search(content)
     if not m:
-        return None
+        return _video_cover_by_meta(content, create_time)
     conn = _hardlink_conn()
     if conn is None:
-        return None
+        return _video_cover_by_meta(content, create_time)
     try:
         row = conn.execute(
             "SELECT file_name, dir1 FROM video_hardlink_info_v4 WHERE md5=? LIMIT 1",
@@ -474,11 +618,11 @@ def extract_video_cover(content: str) -> Optional[bytes]:
         ).fetchone()
         dmap = _dir_map(conn) if row else {}
     except Exception:
-        return None
+        return _video_cover_by_meta(content, create_time)
     finally:
         conn.close()
     if not row:
-        return None
+        return _video_cover_by_meta(content, create_time)
     file_name, dir1 = row
     base = file_name
     for suffix in (".mp4", ".mp4_raw", "_raw.mp4"):
@@ -506,7 +650,33 @@ def extract_video_cover(content: str) -> Optional[bytes]:
                     continue
                 if jpeg:
                     return jpeg
-    return None
+    return _video_cover_by_meta(content, create_time)
+
+
+def _video_dirs(create_time: int) -> list[Path]:
+    base = Path(os.environ.get("WECHAT_FILES_DIR") or r"F:\xwechat_files")
+    if not base.exists():
+        return []
+    out = []
+    for acc in base.iterdir():
+        vroot = acc / "msg" / _VIDEO_DIRS
+        if not vroot.exists():
+            continue
+        for month in _month_dirs(create_time):
+            d = vroot / month
+            if d.exists():
+                out.append(d)
+        out.append(vroot)
+    return out
+
+
+def _video_cover_by_meta(content: str, create_time: int) -> Optional[bytes]:
+    """封面不依赖登记表：按 cdnthumblength 与宽高在 msg/video 目录里比对。"""
+    _, thumb_len, wh = _meta_of(content)
+    if not thumb_len:
+        return None
+    blob = _pick_by_meta(_video_dirs(create_time), "*.jpg", thumb_len, wh, None, None, tol=8)
+    return normalize_to_jpeg(blob) if blob else None
 
 
 def normalize_to_jpeg(raw: bytes, max_side: int = 1600) -> Optional[bytes]:
@@ -529,8 +699,15 @@ def normalize_to_jpeg(raw: bytes, max_side: int = 1600) -> Optional[bytes]:
         elif im.mode != "RGB":
             im = im.convert("RGB")
         w, h = im.size
+        scale = 1.0
         if max(w, h) > max_side:
             scale = max_side / max(w, h)
+        if h > 3 * w:
+            # 长截图按长边压会把宽度压到几十像素，直接不可读。
+            # 改成保底宽 600、总高不超过 12000，交给上层切段。
+            tall = min(1.0, 12000 / h)
+            scale = max(scale, min(tall, max(600 / w, tall)))
+        if scale < 1.0:
             im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), PILImage.LANCZOS)
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=82)

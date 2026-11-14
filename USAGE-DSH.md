@@ -120,6 +120,15 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP syst
 
 返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）、hints（按实际内容给出的使用提示）。
 
+另有 self 与 senders 两个字段：
+
+| 字段 | 内容 |
+|---|---|
+| self | 账号主人：id（wxid）、nickname、alias、note（怎么区分收发） |
+| senders | 发言人映射表，键是 wxid，值含 name、nickname、alias、friend |
+
+每条消息只带 sender_name（自己发的显示「我」）与 direction，不再逐条重复 sender_id；要 wxid 就去 senders 按名字反查。
+
 include_media 的媒体约定：
 
 | 类型 | media 字段 |

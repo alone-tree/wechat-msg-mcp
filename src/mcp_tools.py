@@ -159,6 +159,40 @@ def _save_images(obj: dict, images: list, src, target=None) -> int:
     return saved
 
 
+def _tiles_for(data: bytes, tile_height: int = 1600, max_tiles: int = 10) -> list:
+    """超长截图切成竖条，否则客户端把整图缩到 1600 高后文字完全看不清。
+
+    只在长宽比超过 3 且高度超过一个 tile 时切；普通图片返回空列表。
+    """
+    import io
+
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        return []
+    try:
+        with PILImage.open(io.BytesIO(data)) as im:
+            im.load()
+            w, h = im.size
+            if w <= 0 or h <= tile_height or h < 3 * w:
+                return []
+            n = min(max_tiles, -(-h // tile_height))
+            step = -(-h // n)
+            out = []
+            for i in range(n):
+                top = i * step
+                bottom = min(h, top + step)
+                if bottom - top < 40:
+                    break
+                tile = im.crop((0, top, w, bottom))
+                buf = io.BytesIO()
+                tile.convert("RGB").save(buf, format="JPEG", quality=85)
+                out.append(buf.getvalue())
+    except Exception:
+        return []
+    return out if len(out) > 1 else []
+
+
 def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
     """按体积预算内联图片。超预算的不内联，落盘后给路径。"""
     from mcp.server.fastmcp.utilities.types import Image
@@ -173,12 +207,26 @@ def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
         if img.get("kind") == "voice":
             continue
         size = len(img["bytes"])
-        if used + size <= INLINE_IMAGE_BUDGET:
-            used += size
-            blocks.append(Image(data=img["bytes"], format="jpeg"))
+        tiles = _tiles_for(img["bytes"]) if img.get("kind") != "voice" else []
+        cost = sum(len(x) for x in tiles) if tiles else size
+        if used + cost <= INLINE_IMAGE_BUDGET:
+            used += cost
+            for tile in tiles or [img["bytes"]]:
+                blocks.append(Image(data=tile, format="jpeg"))
             m = by_id.get(img.get("local_id"))
             if m is not None and isinstance(m.get("media"), dict):
                 m["media"]["inlined"] = True
+                if tiles:
+                    from . import export
+
+                    info = media_inline.save_jpeg(
+                        src, img["bytes"], "full", export.run_dir() / "media"
+                    )
+                    m["media"]["tiles"] = len(tiles)
+                    m["media"]["path"] = info["path"]
+                    m["media"]["note"] = (
+                        f"长截图已切成 {len(tiles)} 段按顺序返回，整图另存 media.path 便于核对"
+                    )
         else:
             overflow.append(img)
 
@@ -236,13 +284,16 @@ def register(mcp, get_service) -> None:
         if action == "status":
             return _dumps(st)
 
+        from .config import get_account_wxid
         from .guide import GUIDE
+        from .messages import _self_info
 
         idx = st.get("index") or {}
         return _dumps(
             {
                 "server": "wechat-msg-mcp",
                 "intro": "本机微信聊天记录只读查询，数据不出本机。",
+                "self": _self_info(get_account_wxid(), None, svc.src),
                 "guide": GUIDE,
                 "status": {
                     "state": st.get("state"),
