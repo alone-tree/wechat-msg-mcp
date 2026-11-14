@@ -91,9 +91,27 @@ uv run python -m src.cli sync                   # 解密加索引，与 MCP 的 
 | cursor | 上一页的 next_cursor |
 | output | inline（默认）或 file |
 | format | output=file 时的 csv/json/md/html |
-| include_media | true 时图片/表情/视频封面落盘为 JPEG 并返回路径，语音转写为文字；本次最多 8 条图片与 8 条语音 |
+| include_media | true 时图片、表情、视频封面作为图片内容直接内联返回，AI 一次调用就能看到图；语音直接给转写文字 |
+| extract_media | 额外把媒体原文件存成文件：留空不存，auto 存到本进程导出目录，也可传绝对目录 |
 
-返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）。文件消息的 media 里带落盘路径，取不到时 exists=false；include_media=true 时图片与表情带 JPEG 路径，语音带 voice_text。
+返回含 total、returned、has_more、next_cursor、messages、unresolved（目标解析失败时给候选）、hints（按实际内容给出的使用提示）。
+
+include_media 的媒体约定：
+
+| 类型 | media 字段 |
+|---|---|
+| 图片 | kind、source（dat/cache/thumb）、bytes、inlined |
+| 视频 | kind、duration、source=cover、bytes、inlined |
+| 语音 | kind、duration、transcribed，另给 voice_text |
+| 链接 | kind=link、url、title、desc、openable |
+| 转账 | kind=transfer、amount、des、pay_sub_type |
+| 红包 | kind=red_packet、url、des，amount 为 null 并注明需拆开 |
+| 小程序与视频号 | kind、url、title、openable |
+| 文件 | name、size、path、exists |
+
+体积上限：内联图片原始字节总计 6MB（传 base64 后约 8MB）。超过的图片不内联，改成落盘并在 media.path 给路径，同时用 media_inline.note 说明还有多少张未内联，这样正常情况不会撞到宿主 10MB 断连。
+
+图片内联只在本地有原图或缓存时成立。微信没下载过的图只有 kind，没有字节，media 里也不会出现 inlined。
 
 inline 模式下若返回超过 80 KB 或 200 条，会自动落盘并在 auto_export 里给路径、行数与原因，messages 只留前 3 条预览。
 

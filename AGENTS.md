@@ -56,7 +56,7 @@
 | docs/任务清单.md | 唯一任务表 T01 至 T20，含优先级、阶段、状态 | 是 |
 | docs/开发日志.md | 按日期的变更、原因、验证与提交号 | 是 |
 | docs/交接.md | 当前进度、已定接口与下一步 | 是 |
-| docs/重构方案-2026-11-13.md | 设计与阶段验收，已实施至阶段 8 | 是 |
+| docs/重构方案-2026-11-13.md | 设计与阶段验收，已实施至阶段 10 | 是 |
 | docs/业务场景与程序不匹配.md | 业务复盘产出的 M1 至 M10 原始清单 | 是 |
 | private-docs/README.md | 私人资料的规则、命名与索引 | 否 |
 | private-docs/业务场景不匹配-真实案例.md | M1 至 M5 的真实群名、群ID、条数、复现参数 | 否 |
@@ -96,7 +96,7 @@ wechat-msg-mcp/
 │   ├── relations.py            群成员、共同群、跨群发言、活跃统计
 │   ├── export.py               导出 json/csv/md/html
 │   ├── media_files.py          文件消息落盘路径
-│   ├── media_inline.py         图片落盘、表情首帧、语音转写
+│   ├── media_inline.py         图片字节提取、语音转写、按需落盘
 │   ├── sync.py                 数据状态报告（刷新已移到 freshness）
 │   ├── cli.py                  wechatq 命令（与 MCP 同参）
 │   ├── db/
@@ -149,6 +149,7 @@ wechat-msg-mcp/
 | 启动方式 | mcp_load 自动拉起，实测约 1 秒，无需预热 |
 | 刷新机制 | 查询前按 TTL（默认 60 秒）增量刷新，失败降级不阻断 |
 | 导出 | 每进程写 exports/run-<pid>-<时间>/，12 小时自动清理；AI 可用 output_dir 指定目录，指定目录不清理 |
+| 媒体内联 | include_media=true 时图片、表情、视频封面以图片内容直接返回，语音给转写文字；内联预算 6MB，超出部分落盘给路径 |
 | 增量解密 | 只解 mtime 比副本新的库，日常约 0.5 到 2.5 秒；全量约 10 秒 |
 | 微信数据 | F:\xwechat_files，账户 wxid_ 开头，db_storage 下按模块分目录 |
 | 解密输出 | decrypted/，模块分目录：contact/、message/、session/、sns/、favorite/ 等 |
@@ -170,4 +171,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 8：七个 MCP 工具（list_entities、get_messages、relations、search、sync、list_moments、list_favorites）全部可用；联系人新增地区与添加时间；旧 reader/tools/windows_reader 已删；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；45 项单测通过。阶段 8 把传输改为 stdio 自启动、解密改为增量、查询前自动刷新。
+重构已完成阶段 1 到 10：七个 MCP 工具全部可用；联系人新增地区与添加时间；CLI 与 MCP 同参；年度报告 4.4 秒跑完 2025 年；45 项单测通过。阶段 8 改为 stdio 自启动加查询前自动刷新；阶段 9 导出按进程隔离；阶段 10 图片直接内联、补全链接 URL 与转账金额、按体积预算保护。
