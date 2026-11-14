@@ -33,3 +33,6 @@ verify_query.py
 /exports/
 /reports/
 /decrypted/_index/
+
+# 外部工具目录
+.deja/
