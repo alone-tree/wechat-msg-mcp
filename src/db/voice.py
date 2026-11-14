@@ -36,6 +36,20 @@ def _model_ready() -> bool:
     )
 
 
+def model_ready() -> bool:
+    """语音识别模型是否就位。没就位时转写会直接失败，调用方应给出提示。"""
+    return _model_ready()
+
+
+def install_hint() -> str:
+    """模型缺失时的安装提示，直接给 AI 看。"""
+    return (
+        "语音识别模型未安装，所以语音消息只能拿到音频、拿不到文字。"
+        f"需要把 SenseVoiceSmall int8 的 model.int8.onnx 与 tokens.txt 放到 {MODEL_DIR}。"
+        "模型来自 sherpa-onnx 官方模型库的 sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17。"
+    )
+
+
 def _load_recognizer():
     global _recognizer
     if _recognizer is not None:
@@ -130,6 +144,8 @@ def _transcribe_blob(blob: bytes, work_dir: str):
 def transcribe_voice_blob(blob: bytes, work_dir: str):
     """带缓存的转写入口。返回 (text_or_None, duration_or_None)。"""
     if not blob:
+        return None, None
+    if not _model_ready():
         return None, None
     key = "md5:" + hashlib.md5(blob).hexdigest()
     cache = _load_cache()

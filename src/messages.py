@@ -378,6 +378,15 @@ def list_messages(
     heaps: dict[str, list] = {}
     db_cache: dict[str, tuple[dict, dict]] = {}
     media_budget = {"voice": 8}
+    voice_model_ok = True
+    if include_media:
+        try:
+            from .db import voice as _voice_mod
+
+            voice_model_ok = _voice_mod.model_ready()
+        except Exception:
+            voice_model_ok = False
+    voice_model_missing = 0
 
     for cid, cname, db, tbl in jobs:
         conn = connect_ro(db)
@@ -471,6 +480,9 @@ def list_messages(
 
             kind = (row["media"] or {}).get("kind")
             if kind == "voice":
+                if not voice_model_ok:
+                    voice_model_missing += 1
+                    continue
                 if media_budget["voice"] > 0:
                     media_budget["voice"] -= 1
                     text, blob = media_inline.voice_transcript(src, row)
@@ -525,6 +537,14 @@ def list_messages(
         hints.append("红包金额本地不存，需拆开后才可见")
     if hints:
         result["hints"] = hints
+    if voice_model_missing:
+        try:
+            from .db import voice as _vm
+
+            result.setdefault("warnings", []).append(_vm.install_hint())
+        except Exception:
+            pass
+        result["voice_model_missing"] = voice_model_missing
     return result
 
 

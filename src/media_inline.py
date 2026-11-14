@@ -113,7 +113,7 @@ def save_voice(blob: bytes, out_dir) -> dict:
             silk_path = Path(td) / "a.silk"
             wav_path = Path(td) / "a.wav"
             silk_path.write_bytes(blob)
-            pilk.silk_to_wav(str(silk_path), str(wav_path), rate=24000)
+            pilk.silk_to_wav(str(silk_path), str(wav_path), rate=16000)
             payload = wav_path.read_bytes()
         path = d / f"voice-{tag}.wav"
         if not path.exists():
@@ -126,7 +126,7 @@ def save_voice(blob: bytes, out_dir) -> dict:
                 duration = round(w.getnframes() / w.getframerate(), 2)
         except Exception:
             pass
-        return {"path": str(path), "bytes": len(payload), "format": "wav", "duration": duration}
+        return {"path": str(path), "bytes": len(payload), "format": "wav", "rate": 16000, "duration": duration}
     except Exception:
         path = d / f"voice-{tag}.silk"
         if not path.exists():
