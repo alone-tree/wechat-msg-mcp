@@ -307,7 +307,7 @@ python -m src.cli resolve 旧群名
 | 目标名找不到 | 用 python -m src.cli resolve 取候选；群改名后会返回相似名 |
 | 文件消息路径为空 | 该文件可能未落本地；exists=false 时只能等微信下载 |
 | 报 unknown_types | types 取值写错了，按 error.candidates 里的合法值改 |
-| CLI 同时用 --json 和 --include-media 报 Object of type bytes is not JSON serializable | 图片字节不能进 JSON；去掉 --json 用默认 NDJSON，或媒体改走 MCP |
+| CLI 加 --include-media 时有媒体字节 | 已修：CLI 弹出字节不内联，只在 stderr 提示；要看图走 MCP 或落盘 |
 | 多目标查询在 lite 档看不出消息属于哪个会话 | lite 只在未指定 targets 时给 chat；多目标升 --detail full 用 chat_name，或一个会话查一次 |
 | 系统消息只有一句话 | 默认折叠，原文在 --detail raw 的 raw 字段 |
 | 图片只有 kind 没有字节 | 看 media.missing_reason：hardlink_row_missing 先 sync 后重查；file_not_on_disk 是在微信里没打开过 |

@@ -101,6 +101,12 @@ def cmd_messages(args) -> int:
     obj = svc.get_messages(**kwargs)
     if not obj.get("ok", True):
         return _fail(obj)
+    images = obj.pop("_images", None) or []
+    if images:
+        # CLI 不内联图片字节（转写文字已经写进 text），留在响应里会让 JSON 序列化直接报错
+        obj.setdefault("warnings", []).append(
+            f"本次提取了 {len(images)} 项媒体字节，CLI 不内联；要看图请用 MCP，或加 --output file 配合 --include-media 落盘"
+        )
     _warn(obj)
     if args.format in ("text", "md"):
         from . import render

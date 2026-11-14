@@ -609,6 +609,7 @@ def list_messages(
 
     unresolved: list[dict] = []
     ambiguous: list[dict] = []
+    fuzzy: list[dict] = []
     jobs: list[tuple[Optional[str], Optional[str], Path, str]] = []
     if targets:
         for t in targets:
@@ -617,6 +618,14 @@ def list_messages(
                 unresolved.append({"input": t, "reason": "not_found", "candidates": []})
                 continue
             best = hit["candidates"][0]
+            if best.get("matched") == "similar":
+                fuzzy.append(
+                    {
+                        "input": t,
+                        "chosen": {"id": best["id"], "name": best.get("name", "")},
+                        "reason": "没有精确或包含命中，按相似度取了最接近的一个",
+                    }
+                )
             if len(hit["candidates"]) > 1 and best.get("matched") != "exact":
                 ambiguous.append(
                     {
@@ -876,6 +885,9 @@ def list_messages(
         )
     if unresolved:
         warnings.append("有目标名没解析到，见 unresolved；不要把它当成该会话没有消息")
+    if fuzzy:
+        result["fuzzy"] = fuzzy
+        warnings.append("有目标名只按相似度命中，可能查错会话；用 list_entities 或 resolve 核对准确名字")
     if ambiguous:
         result["ambiguous"] = ambiguous
         warnings.append(

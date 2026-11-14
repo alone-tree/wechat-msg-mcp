@@ -244,7 +244,7 @@ groups 的用法：--members 甲 乙 默认要求两人都在同一群；加 --a
 |---|---|
 | data_until 比最新消息晚几分钟 | 它是数据源最后写入时间，不是消息时间 |
 | types 写错直接报错 | 不再静默返回空结果；返回 error.code=unknown_types 并列出合法值，退出码 2 |
-| CLI 同时用 --json 和 --include-media 报 bytes is not JSON serializable | 图片字节不能进 JSON；改用默认 NDJSON 输出，或媒体改走 MCP |
+| CLI 加 --include-media 时有媒体字节 | 已修：CLI 不内联字节（转写文字照样写进 text），只在 stderr 提示提取了多少项；要看图走 MCP |
 | 多目标查询在 lite 档分不清哪条属于哪个会话 | lite 只在未指定 targets 时给 chat；多目标请 --detail full 用 chat_name，或一个会话查一次 |
 | 系统消息看起来只剩一句话 | 默认折叠，原始 XML 在 --detail raw 的 raw 字段 |
 | 刚发的消息查不到 | 微信还没写入主库的 WAL，谁都读不到，等几秒再试 |
