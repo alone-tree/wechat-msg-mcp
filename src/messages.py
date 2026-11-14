@@ -950,6 +950,97 @@ def _db_maps(db: Path, conn) -> tuple[dict, dict]:
     return value
 
 
+def _save_row_media(src: LocalSource, row: dict, root: Path, budget: dict) -> None:
+    """导出时把这一行的媒体落成文件，并把路径写回 media.path。
+
+    导出不内联（调用方拿不到图片字节），所以图片、语音、视频封面、视频本体、文件
+    统一落在 root 下的 media / voice / video / files 子目录，一行只处理一次。
+    """
+    from . import media_inline
+
+    media = row.get("media")
+    if not isinstance(media, dict):
+        return
+    kind = media.get("kind")
+    if kind in ("file", "video") and ("path" not in media or "exists" not in media):
+        _enrich_media(src, row)
+        media = row["media"]
+        kind = media.get("kind")
+    if budget["saved"] >= budget["limit"]:
+        if kind in ("image", "emoticon", "voice", "video", "file"):
+            budget["skipped"] += 1
+            # 被上限挡下的行也要说清楚，不能让导出结果里空着
+            media["missing_reason"] = "media_limit_reached"
+        return
+
+    if kind in ("image", "emoticon"):
+        data, source, reason = media_inline.image_bytes_for(row, row.get("raw") or "")
+        if not data:
+            reason = reason or "extract_failed"
+            budget["missing"][reason] = budget["missing"].get(reason, 0) + 1
+            media["missing_reason"] = reason
+            return
+        info = media_inline.save_jpeg(src, data, kind, root / "media")
+        media["path"] = info["path"]
+        media["source"] = source
+        media.pop("missing_reason", None)
+        budget["saved"] += 1
+        budget["images"] += 1
+        return
+
+    if kind == "voice":
+        transcript, blob = media_inline.voice_transcript(src, row)
+        if transcript:
+            row["text"] = transcript
+        if not blob:
+            budget["missing"]["no_audio"] = budget["missing"].get("no_audio", 0) + 1
+            media["missing_reason"] = "no_audio"
+            return
+        info = media_inline.save_voice(blob, root / "voice")
+        media["path"] = info["path"]
+        media.pop("missing_reason", None)
+        budget["saved"] += 1
+        budget["voice"] += 1
+        return
+
+    if kind == "video":
+        cover, _source, _reason = media_inline.image_bytes_for(row, row.get("raw") or "")
+        if cover:
+            info = media_inline.save_jpeg(src, cover, "video-cover", root / "media")
+            media["cover_path"] = info["path"]
+            budget["saved"] += 1
+            budget["video"] += 1
+        elif media.get("path") and media.get("exists"):
+            pass
+        else:
+            budget["missing"]["no_local_video"] = budget["missing"].get("no_local_video", 0) + 1
+            media["missing_reason"] = "no_local_video"
+        if media.get("path") and media.get("exists"):
+            from . import media_files
+
+            copy = media_files.export_copy(media, root / "video")
+            if copy and copy.get("exported"):
+                media["source_path"] = copy.get("source_path", "")
+                media["path"] = copy["path"]
+                budget["saved"] += 1
+                budget["video_files"] += 1
+        return
+
+    if kind == "file":
+        from . import media_files
+
+        if not media.get("path") or not media.get("exists"):
+            budget["missing"]["no_local_file"] = budget["missing"].get("no_local_file", 0) + 1
+            media["missing_reason"] = "no_local_file"
+            return
+        copy = media_files.export_copy(media, root / "files")
+        if copy and copy.get("exported"):
+            media["path"] = copy["path"]
+            media["source_path"] = copy.get("source_path", "")
+            budget["saved"] += 1
+            budget["files"] += 1
+
+
 def export_stream(
     src: LocalSource,
     targets: Optional[list[str]] = None,
@@ -960,6 +1051,8 @@ def export_stream(
     keyword: str = "",
     order: str = "asc",
     detail: str = "full",
+    media_dir: str = "",
+    media_limit: int = 500,
 ):
     """导出专用：每张会话表只扫一遍，按时间顺序流式产出消息。
 
@@ -1021,6 +1114,25 @@ def export_stream(
 
     show_chat = detail == "lite" and bool(targets) and len({j[0] for j in jobs}) > 1
     direction = "ASC" if order == "asc" else "DESC"
+    media_root = Path(media_dir) if media_dir else None
+    try:
+        cap = int(media_limit or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    budget = {
+        "saved": 0,
+        "images": 0,
+        "voice": 0,
+        "video": 0,
+        "video_files": 0,
+        "files": 0,
+        "skipped": 0,
+        "missing": {},
+        # 0 表示不设上限
+        "limit": cap if cap > 0 else 1 << 60,
+        "limit_display": cap,
+        "dir": str(media_root) if media_root else "",
+    }
 
     def one_job(cid: Optional[str], cname: Optional[str], db: Path, tbl: str):
         conn = connect_ro(db)
@@ -1056,6 +1168,8 @@ def export_stream(
                         continue
                 if kw and kw not in (row["text"] or "").lower():
                     continue
+                if media_root is not None:
+                    _save_row_media(src, row, media_root, budget)
                 yield _sort_key(row), _project(row, detail, show_chat)
         finally:
             conn.close()
@@ -1074,6 +1188,7 @@ def export_stream(
         "data_until": src.data_until("message"),
         "unresolved": unresolved,
         "tables": len(jobs),
+        "media": budget,
     }
     return (row for _key, row in merged), meta
 

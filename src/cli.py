@@ -94,7 +94,13 @@ def cmd_messages(args) -> int:
         detail=args.detail,
     )
     if args.output == "file":
-        result = svc.export_messages(out_dir=args.out, fmt=args.format, **kwargs)
+        result = svc.export_messages(
+            out_dir=args.out,
+            fmt=args.format,
+            with_media=not args.no_media,
+            media_limit=args.media_limit,
+            **kwargs,
+        )
         _emit(result)
         return 0 if result.get("exported") else 1
 
@@ -301,6 +307,8 @@ def cmd_export(args) -> int:
     result = svc.export_messages(
         out_dir=args.out,
         fmt=args.format,
+        with_media=not args.no_media,
+        media_limit=args.media_limit,
         targets=args.targets or None,
         sender=args.sender,
         start=args.start,
@@ -356,6 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--include-media", action="store_true", help="提取语音转写与图片路径")
     m.add_argument("--output", default="inline", choices=["inline", "file"])
     m.add_argument("--out", default="", help="--output file 时的落盘目录")
+    m.add_argument("--no-media", action="store_true", help="落盘时不导出图片、语音、视频与文件（默认会导出）")
+    m.add_argument("--media-limit", type=int, default=500, help="媒体文件最多存几个，0 表示不限，默认 500")
     m.add_argument(
         "--format",
         default="ndjson",
@@ -398,6 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--keyword", default="")
     e.add_argument("--format", default="csv", choices=["csv", "json", "ndjson", "md", "text", "html"])
     e.add_argument("--out", default="")
+    e.add_argument("--no-media", action="store_true", help="不导出图片、语音、视频与文件（默认会导出）")
+    e.add_argument("--media-limit", type=int, default=500, help="媒体文件最多存几个，0 表示不限，默认 500")
     e.set_defaults(func=cmd_export)
 
     rs = sub.add_parser("resolve", parents=[common], help="名称解析，返回候选")

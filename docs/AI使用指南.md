@@ -162,6 +162,19 @@ python -m src.cli groups --members 甲 乙 --json
 python -m src.cli rel --kind group_members --subject 某群 --json
 python -m src.cli search 合同 --limit 20 --json
 python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out 某目录
+
+导出会自动把媒体落成真实文件，不走内联（AI 拿到的是路径，不是字节）：
+
+| 类型 | 落盘位置 | 说明 |
+|---|---|---|
+| 图片、表情、视频封面 | <out>/media-export/media/ | 默认 JPEG，按内容哈希命名，内容相同的只存一份 |
+| 语音 | <out>/media-export/voice/ | 转成 16kHz WAV，可直接播放；转写文字仍写进 text |
+| 视频原件 | <out>/media-export/video/ | 本机有 mp4 才复制，media.path 指副本、source_path 留原件 |
+| 文件消息 | <out>/media-export/files/ | 原样复制；超过 100MB 不复制并给 note |
+
+media.path 在导出的每一行里都指向副本路径，能直接读；拿不到时同位置给 missing_reason（no_local_image、no_local_file、no_local_video、decode_failed、media_limit_reached 等）。
+
+默认最多存 500 个，--media-limit 改数量（0 表示不限），--no-media 完全关掉。返回值里的 media_export 给 dir、images、voice、video_covers、video_files、files、saved、skipped、missing、limit。
 python -m src.cli status --json
 ```
 
@@ -265,7 +278,7 @@ groups 的用法：--members 甲 乙 默认要求两人都在同一群；加 --a
 | 某群最近一周的图片和链接 | get_messages(targets=[群], start_date=七天前, types=["image","link"]) |
 | 某人在哪些群活跃 | relations(kind="person_activity", subject="某人") |
 | 某个词在哪些会话出现过 | search(query="词", scope="message") |
-| 导出某群全年对话 | python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out 某目录 |
+| 导出某群全年对话（连图片视频一起导） | python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out 某目录；媒体自动落到 media-export 下，--no-media 关掉 |
 | 两个人都在这群吗 | python -m src.cli groups --members 甲 乙（默认要求全部命中，加 --any-member 放宽） |
 | 群成员报表 | relations(kind="group_members") 拿全量，再批量 get_messages 统计发言人 |
 | 某人最近的朋友圈 | list_moments(author="某人", limit=20) |

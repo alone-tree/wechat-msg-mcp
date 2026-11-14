@@ -47,3 +47,48 @@ def test_respond_keeps_extra_collections_in_sidecar(tmp_path):
     assert sorted(payload) == ["by_hour", "top_senders"]
     assert len(payload["by_hour"]) == 24
     assert "warnings" not in payload
+
+
+def test_save_row_media_copies_file_message(tmp_path):
+    from src.messages import _save_row_media
+
+    origin = tmp_path / "wechat" / "a.pdf"
+    origin.parent.mkdir()
+    origin.write_bytes(b"%PDF-1.4 fake")
+    row = {
+        "media": {
+            "kind": "file",
+            "name": "a.pdf",
+            "size": origin.stat().st_size,
+            "path": str(origin),
+            "exists": True,
+        }
+    }
+    budget = {"saved": 0, "images": 0, "voice": 0, "video": 0, "video_files": 0, "files": 0,
+              "skipped": 0, "missing": {}, "limit": 10}
+    _save_row_media(None, row, tmp_path / "out", budget)
+    media = row["media"]
+    assert media["path"] != str(origin)
+    assert media["source_path"] == str(origin)
+    assert (tmp_path / "out" / "files" / "a.pdf").exists()
+    assert budget["files"] == 1 and budget["saved"] == 1
+
+
+def test_save_row_media_respects_limit_and_marks_reason(tmp_path):
+    from src.messages import _save_row_media
+
+    # 超过上限：不改路径，但标清楚原因
+    over = {"media": {"kind": "file", "name": "x.pdf", "size": 1, "path": "", "exists": False}}
+    budget = {"saved": 99, "images": 0, "voice": 0, "video": 0, "video_files": 0, "files": 0,
+              "skipped": 0, "missing": {}, "limit": 5}
+    _save_row_media(None, over, tmp_path / "out", budget)
+    assert over["media"]["missing_reason"] == "media_limit_reached"
+    assert budget["skipped"] == 1
+
+    # 没超上限但本地没有文件：标 no_local_file
+    missing = {"media": {"kind": "file", "name": "y.pdf", "size": 1, "path": "", "exists": False}}
+    budget2 = {"saved": 0, "images": 0, "voice": 0, "video": 0, "video_files": 0, "files": 0,
+               "skipped": 0, "missing": {}, "limit": 5}
+    _save_row_media(None, missing, tmp_path / "out", budget2)
+    assert missing["media"]["missing_reason"] == "no_local_file"
+    assert budget2["missing"]["no_local_file"] == 1

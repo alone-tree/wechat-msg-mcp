@@ -51,11 +51,26 @@ class Service:
     def get_messages(self, **kwargs) -> dict:
         return self._with_fresh(messages.list_messages(self.src, **kwargs))
 
-    def export_messages(self, out_dir: str = "", fmt: str = "csv", **kwargs) -> dict:
-        """导出：每张会话表只扫一遍再落盘，几十万条的大群也不会越翻越慢。"""
+    def export_messages(
+        self,
+        out_dir: str = "",
+        fmt: str = "csv",
+        with_media: bool = True,
+        media_limit: int = 500,
+        **kwargs,
+    ) -> dict:
+        """导出：每张会话表只扫一遍再落盘，几十万条的大群也不会越翻越慢。
+
+        with_media 默认开：图片、语音、视频封面与本体、文件消息都会落成真实文件，
+        并把副本路径写进导出的 media.path（导出不内联，AI 拿不到字节）。
+        """
         from . import export
 
         limit_rows = int(kwargs.pop("max_rows", 200000) or 200000)
+        media_root = ""
+        if with_media:
+            base = Path(out_dir) if out_dir else export.run_dir()
+            media_root = str(base / "media-export")
         detail = str(kwargs.get("detail") or "full").lower()
         if detail == "lite":
             # 导出要能分辨会话与类型，lite 不带 chat_name 与 type
@@ -71,6 +86,8 @@ class Service:
                 keyword=kwargs.get("keyword", ""),
                 order=kwargs.get("order") or "asc",
                 detail=detail,
+                media_dir=media_root,
+                media_limit=media_limit,
             )
         except ValueError as exc:
             return {
@@ -104,6 +121,29 @@ class Service:
                 "unresolved": meta.get("unresolved") or [],
             }
         )
+        media = meta.get("media") or {}
+        if media_root and media.get("saved"):
+            result["media_export"] = {
+                "dir": media.get("dir"),
+                "images": media.get("images"),
+                "voice": media.get("voice"),
+                "video_covers": media.get("video"),
+                "video_files": media.get("video_files"),
+                "files": media.get("files"),
+                "saved": media.get("saved"),
+                "skipped": media.get("skipped"),
+                "missing": media.get("missing") or {},
+                "limit": media.get("limit_display", media.get("limit")),
+            }
+        elif media_root:
+            result["media_export"] = {
+                "dir": media.get("dir"),
+                "saved": 0,
+                "skipped": media.get("skipped"),
+                "missing": media.get("missing") or {},
+                "limit": media.get("limit_display", media.get("limit")),
+                "note": "本次导出的数据里没有可落盘的媒体",
+            }
         if partial:
             result["note"] = f"达到 {limit_rows} 行上限，剩余未导出，可用时间段或 targets 分批"
         return result

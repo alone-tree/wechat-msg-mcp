@@ -139,7 +139,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 109 项）
+├── tests/                      单元测试（共 111 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -160,6 +160,7 @@ wechat-msg-mcp/
 | 启动方式 | mcp_load 自动拉起，实测约 1 秒，无需预热；也有 system(action=start) 给任意客户端拿说明书 |
 | 刷新机制 | 查询前按 TTL（默认 60 秒）增量刷新，失败降级不阻断 |
 | 导出 | 每进程写 exports/run-<pid>-<时间>/，12 小时自动清理；AI 可用 output_dir 指定目录，指定目录不清理。导出走单遍流式：每张会话表只读一次、按时间顺序产出，30 万条的群约 6.5 秒，20 万行上限 |
+| 导出媒体 | CLI 导出默认把图片、表情、视频封面落 media-export/media，语音转 WAV 落 voice，视频 mp4 落 video，文件消息落 files；media.path 指副本，默认上限 500 个，--media-limit 改、--no-media 关 |
 | 媒体内联 | include_media=true 时图片、表情、视频封面以图片内容直接返回，语音给转写文字；内联预算 6MB，超出部分落盘给路径 |
 | 消息字段 | 不带收发方向；from 是显示名（自己固定「我」，系统消息为空），text 自足；lite/full/raw 三档，MCP 默认 lite、CLI 默认 full |
 | 系统消息 | 默认折叠成「[系统] 一句话」，原始 XML 只在 raw 档；拍一拍归 system |
@@ -194,4 +195,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；109 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。
+重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；111 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。
