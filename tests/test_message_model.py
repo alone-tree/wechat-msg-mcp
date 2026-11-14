@@ -1,5 +1,5 @@
 """消息模型：text 自足、三档详细度、类型校验。"""
-from src.messages import _describe, _project, _wanted_types, valid_types
+from src.messages import _describe, _project, _unknown_sender, _wanted_types, valid_types
 
 FILE_XML = (
     '<?xml version="1.0"?><msg><appmsg appid="" sdkver="0">'
@@ -138,3 +138,11 @@ def test_valid_types_are_sorted_and_complete():
     values = valid_types()
     assert values == sorted(values)
     assert {"text", "image", "system", "transfer", "red_packet"} <= set(values)
+
+
+def test_system_message_is_not_unknown_sender():
+    assert _unknown_sender("system", False, None) is False
+    assert _unknown_sender("revoked", False, None) is False
+    assert _unknown_sender("text", False, None) is True
+    assert _unknown_sender("text", False, "wxid_a") is False
+    assert _unknown_sender("text", True, None) is False

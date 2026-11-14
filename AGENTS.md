@@ -139,7 +139,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 98 项）
+├── tests/                      单元测试（共 102 项）
 ├── reports/                    年度报告产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
@@ -165,7 +165,7 @@ wechat-msg-mcp/
 | 系统消息 | 默认折叠成「[系统] 一句话」，原始 XML 只在 raw 档；拍一拍归 system |
 | 群名兜底 | 备注 > 群昵称 > 成员昵称拼接（等 N 人）>「群聊」；name_source 标明来源，未与客户端截图对照 |
 | 分页 | 统一 total、returned、has_more、next；消息的 next 是游标，其余是 offset；data_until 是数据截止时间 |
-| 单次查询耗时 | TTL 内约 0.14 到 0.2 秒，联系人、群成员、发送者表与分表位置都按库文件时间缓存 |
+| 单次查询耗时 | TTL 内约 0.15 到 0.4 秒，会话越大越慢（小会话 0.14 秒，三千行会话取 50 条约 0.35 秒）；CLI 端到端再加约 1.2 秒进程启动；缓存覆盖联系人、群成员、发送者表、会话表与分表位置 |
 | 增量解密 | 只解 mtime 比副本新的库，日常约 0.5 到 2.5 秒；全量约 10 秒 |
 | 副本句柄规则 | 任何模块都不得长期持有 decrypted/ 下数据库的 sqlite 连接，一律开-查-关并加 immutable=1。Windows 不共享 DELETE，长驻句柄会让所有刷新永久失败（2026-11-14 踩过） |
 | 副本被占用 | 刷新写 <名>.new 旁路副本，读取方按 mtime 取最新（latest_copy）；占用者退出后下一次刷新自动归位 |
@@ -194,4 +194,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；98 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照，视频 mp4 原件导出链路未实测。
+重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；102 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。

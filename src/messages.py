@@ -415,7 +415,7 @@ def _build_row(
         "from": "我" if is_me else (contacts.name_of(sid) or "" if sid else ""),
         "sender_id": sid or "",
         "is_me": is_me,
-        "unknown_sender": bool(not is_me and not sid),
+        "unknown_sender": _unknown_sender(type_name, is_me, sid),
         "type": type_name,
         "subtype": subtype,
         "chat_id": "",
@@ -428,6 +428,13 @@ def _build_row(
         "tbl": table,
         "raw": body,
     }
+
+
+def _unknown_sender(type_name: str, is_me: bool, sid: Optional[str]) -> bool:
+    """解析不到发送者才算未知。系统消息本来就没有发送者，不算未知。"""
+    if type_name in ("system", "revoked"):
+        return False
+    return bool(not is_me and not sid)
 
 
 def _enrich_media(src: LocalSource, row: dict) -> None:
