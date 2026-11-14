@@ -67,6 +67,12 @@ def search(
     from .entities import load_contacts
     from .messages import _ts, _ts_end
 
+    if scope not in ("message", "entity", "all"):
+        return {
+            "error": f"未知 scope: {scope}",
+            "valid": ["message", "entity", "all"],
+            "hint": "写错取值不会自动回退",
+        }
     scope = scope if scope in ("message", "entity", "all") else "all"
     entities: list[dict] = []
     msgs: list[dict] = []

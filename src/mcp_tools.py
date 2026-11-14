@@ -221,6 +221,14 @@ def register(mcp, get_service) -> None:
         其余六个工具是查询类，会自己按 TTL（默认 60 秒）增量刷新。
         """
         svc = get_service()
+        if action not in ("start", "status", "sync"):
+            return _dumps(
+                {
+                    "error": f"未知 action: {action}",
+                    "valid": ["start", "status", "sync"],
+                    "hint": "写错动作不会自动回退到 start",
+                }
+            )
         if action == "sync":
             return _dumps(svc.refresh(force=force))
 

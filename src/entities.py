@@ -285,6 +285,13 @@ def list_entities(
     smeta = session_meta(src)
     by_user = {c["username"]: c for c in contacts}
 
+    if scope not in ("session", "contact", "group", "all"):
+        return {
+            "error": f"未知 scope: {scope}",
+            "valid": ["session", "contact", "group", "all"],
+            "hint": "写错取值不会自动回退，避免静默返回一份看起来正常的结果",
+        }
+
     if scope == "session":
         rows = []
         for username, s in smeta.items():

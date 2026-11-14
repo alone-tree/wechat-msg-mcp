@@ -108,6 +108,12 @@ def list_favorites(
     want_type = _NAME_TO_TYPE.get((type or "").strip().lower(), 0)
     if (type or "").strip().isdigit():
         want_type = int(type)
+    if (type or "").strip() and not want_type:
+        return {
+            "error": f"未知 type: {type}",
+            "valid": sorted(_NAME_TO_TYPE.keys()),
+            "hint": "写错类型不会自动返回全部，避免看起来像有结果",
+        }
     lo, hi = _ts(since), _ts(until)
     if hi:
         hi += 86399

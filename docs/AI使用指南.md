@@ -31,7 +31,6 @@ MCP 已在客户端注册为 stdio 模式，直接 mcp_load 即可，不需要�
 | get_messages | 读某个会话的消息 | targets、sender、start_date、end_date、types、keyword、order、limit、cursor、include_media、extract_media、output、output_dir、format |
 | relations | 四种关系查询 | kind、subject、targets、since_date、until_date、limit |
 | search | 一次搜实体与消息 | query、scope、since_date、until_date、limit、offset |
-| sync | 数据状态与强制刷新 | action、force |
 | list_moments | 朋友圈 | author、keyword、since_date、until_date、limit、offset、with_interactions |
 | list_favorites | 收藏 | type、keyword、tag、since_date、until_date、limit、offset |
 
@@ -107,7 +106,7 @@ import sys
 sys.path.insert(0, r"D:\Github\wechat-msg-mcp")
 from src.service import Service
 
-svc = Service()                      # 默认读 decrypted/，不会自动刷新
+svc = Service()                      # 默认读 decrypted/ 并按 TTL 自动刷新
 svc.ensure_fresh(force=True)         # 需要最新数据时先刷一次
 
 # 拿某人所有共同群
@@ -125,7 +124,7 @@ for gid in groups:
     print(gid, c.most_common(3))
 ```
 
-注意：走 service 层不会自动刷新解密（MCP 层才有 TTL 逻辑），需要最新数据时显式调 ensure_fresh 或 refresh。
+注意：Service 默认也会自动按 TTL 刷新（auto_refresh=True）；CLI 是靠传 auto_refresh=False 关掉的。
 
 ### 6.3 更深的编排
 

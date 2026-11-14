@@ -67,7 +67,7 @@ GUIDE = """微信聊天记录只读查询（本机数据，不联网）。七个
   wechatq list / messages / rel / search / moments / favorites / export / report / status / sync / index
   例：wechatq messages --targets 某群 --start 2026-11-01 --limit 500 --json
   Python：from src.service import Service; svc = Service(); svc.get_messages(targets=[...], limit=500)
-注意：走 service 时不会自动刷新解密，需要的话先 svc.refresh() 或 svc.ensure_fresh(force=True)。
+注意：Service 默认也会自动按 TTL 刷新（auto_refresh=True）；只有 CLI 与显式传 auto_refresh=False 时才关掉。
 
 【几个容易踩的点】
 - data_cutoff 不是最新消息时间，是数据源最后写入时间，差几分钟属于正常。

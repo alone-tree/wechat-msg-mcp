@@ -53,7 +53,21 @@ def get_service() -> Service:
 mcp_tools.register(mcp, get_service)
 
 
+def _preload():
+    """启动时预加载重依赖。
+
+    stdio 模式下，工具调用线程里首次 import numpy 会卡死（实测稳定复现，
+    堆栈停在 voice.py 的 import numpy）。在进入事件循环之前加载即可避开。
+    失败不影响启动，语音转写会退化成不可用并在结果里给提示。
+    """
+    try:
+        from .db import voice as _voice  # noqa: F401  import 即触发 numpy 加载
+    except Exception:
+        pass
+
+
 def main():
+    _preload()
     if _args.transport == "sse":
         mcp.run(transport="sse")
     elif _args.transport == "streamable-http":
