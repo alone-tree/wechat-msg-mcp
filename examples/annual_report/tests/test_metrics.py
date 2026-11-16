@@ -1,13 +1,21 @@
 """年度报告纯计算层的单元测试。
 
-用 python -m unittest discover -s scripts/annual_report/tests -p "test_*.py" 运行。
+用 uv run --with pytest pytest examples/annual_report/tests -q 运行。
 """
 from __future__ import annotations
 
+import sys
 import unittest
 from datetime import datetime
+from pathlib import Path
 
-from scripts.annual_report.metrics import (
+# 本示例不依赖包结构：把示例目录与仓库根加进 sys.path 后按模块名导入
+_HERE = Path(__file__).resolve().parent
+for _p in (_HERE.parent, _HERE.parents[2]):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from metrics import (  # noqa: E402
     AnnualAggregator,
     chat_kind,
     describe_type,

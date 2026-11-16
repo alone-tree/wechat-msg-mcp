@@ -278,8 +278,6 @@ python -m src.cli resolve 旧群名
 
 入口固定是 python -m src.cli（本机也可写 .venv\Scripts\python.exe -m src.cli），没有 wechatq 可执行文件。
 
-年度报告不在 CLI 里：需要时跑独立脚本 `python -m scripts.annual_report --year 2025 --out reports/2025`。它不属于包，删掉整个 scripts/annual_report 不影响工具。
-
 输出形态：
 
 | 参数 | 作用 |

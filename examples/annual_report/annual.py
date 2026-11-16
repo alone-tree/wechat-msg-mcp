@@ -19,7 +19,7 @@ import zstandard as zstd
 from src.db.open_ import connect_ro, table_exists
 from src.db.sender import build_local_sender_map
 
-from .metrics import (
+from metrics import (
     AnnualAggregator,
     chat_kind,
     hash8,

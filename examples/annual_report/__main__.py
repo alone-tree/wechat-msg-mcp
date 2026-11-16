@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""年度报告独立脚本的命令行入口。
+"""独立年度报告示例的入口：把微信解密库汇总成一份年报。
 
-本来在 CLI 里（python -m src.cli report），2026-11-16 移出包与 CLI：
-年度报告不是工具的固有功能，用户需要时自己跑这个脚本或改写它。
-没有本目录时包与 CLI 完全正常。
+这个目录不属于 wechat-msg-mcp 包，也没有被包或 CLI 引用：
+删掉整个目录，工具照常工作。它只是给需要年报的人一个现成起点，
+可以照抄、改写，或者完全自己写。
 
-用法（在仓库根目录，需要项目依赖与 decrypted/ 数据）：
-    .venv/Scripts/python.exe -m scripts.annual_report --year 2025 --out reports/2025
-    uv run python -m scripts.annual_report --year 2025
+用法（仓库根目录，需要项目依赖与 decrypted/ 数据）：
+    .venv/Scripts/python.exe examples/annual_report/__main__.py --year 2025 --out reports/2025
+    uv run python examples/annual_report/__main__.py --year 2025
 
 产物默认写到 reports/<year>/，六份文件由 annual.run 决定。
 """
@@ -18,18 +18,21 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+# 仓库内运行时让 src 可导入；装成包（pip install）时 src 在 site-packages，这行无副作用。
+ROOT = HERE.parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from annual import run  # noqa: E402
 from src.service import Service  # noqa: E402
-
-from .annual import run  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="微信年度报告（独立脚本，不属于 wechat-msg-mcp 包）"
+        description="微信年度报告（独立示例，不属于 wechat-msg-mcp 包）"
     )
     parser.add_argument("--year", type=int, required=True, help="统计年份，如 2025")
     parser.add_argument("--out", default="", help="输出目录，默认 reports/<year>")

@@ -209,7 +209,7 @@ for gid in groups:
 
 如果要做跨月聚合、逐人画像、批量导出这类活，不要用 MCP 工具一轮轮调（慢且吃 token），直接在项目里写脚本：读 decrypted/ 下的明文库，或用 service 层。
 
-项目里已有现成例子可参考：scripts/annual_report/annual.py（独立脚本，不属于包），两遍扫描 126 万条 4 秒跑完。
+项目里的 src/messages.py 与 src/export.py 就是按这种思路写的，可以照抄结构。
 
 ## 七、CLI 速查
 
