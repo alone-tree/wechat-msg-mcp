@@ -271,13 +271,14 @@ media.path 在导出的每一行里都指向副本路径，能直接读；拿不
 
 默认最多存 500 个，--media-limit 改数量（0 表示不限），--no-media 完全关掉。返回值里的 media_export 给 dir、images、voice、video_covers、video_files、files、saved、skipped、missing、limit。
 python -m src.cli index --rebuild
-python -m src.cli report --year 2025 --out reports/2025
 python -m src.cli status --json
 python -m src.cli sync
 python -m src.cli resolve 旧群名
 ```
 
 入口固定是 python -m src.cli（本机也可写 .venv\Scripts\python.exe -m src.cli），没有 wechatq 可执行文件。
+
+年度报告不在 CLI 里：需要时跑独立脚本 `python -m scripts.annual_report --year 2025 --out reports/2025`。它不属于包，删掉整个 scripts/annual_report 不影响工具。
 
 输出形态：
 

@@ -97,7 +97,7 @@ media.tiles 是段数，段间约 80 像素重叠，边界重复的一两行属�
 本工具只做常用查询，不做复杂聚合，复杂的事交给脚本调 CLI。
 一、多次调用自己拼：先 list_entities / relations 拿范围，再 get_messages 分批取，自己聚合。
 二、写脚本：项目提供与 MCP 同参的 CLI，默认输出 NDJSON（一行一条），最适合管道与循环：
-  python -m src.cli list / messages / rel / search / groups / moments / favorites / export / report / status / sync / index
+  python -m src.cli list / messages / rel / search / groups / moments / favorites / export / status / sync / index
   例：python -m src.cli messages --targets 某群 --start 2026-11-01 --limit 500
   例：python -m src.cli groups --members 甲 乙 --json        # 按成员组合找群
   例：python -m src.cli messages --targets 某群 --format text  # 人读分节文本

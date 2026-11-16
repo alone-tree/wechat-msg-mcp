@@ -1,6 +1,6 @@
 """年度报告端到端测试：造一个迷你 decrypted 目录，跑 run() 校验六份产物。
 
-用 python -m unittest discover -s tests -p "test_report_*.py" 运行。
+用 python -m unittest discover -s scripts/annual_report/tests -p "test_*.py" 运行。
 测试数据全部是虚构内容，不含真实聊天数据。
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ from pathlib import Path
 import zstandard as zstd
 
 from src.db.locator import LocalSource
-from src.report.annual import run
-from src.report.metrics import hash8
+from scripts.annual_report.annual import run
+from scripts.annual_report.metrics import hash8
 
 OWNER = "wxid_owner"
 ALICE = "wxid_alice"

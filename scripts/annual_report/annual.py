@@ -2,7 +2,7 @@
 
 入口是 run(src, year, out_dir)，src 是 LocalSource。
 只读打开 decrypted/ 下的库，按分库与分表分批读取，不把全量消息读进内存。
-依据 docs/重构方案-2026-11-13.md 第 10 节。
+已从包与 CLI 移出（2026-11-16），这里只作独立脚本保留。
 """
 from __future__ import annotations
 

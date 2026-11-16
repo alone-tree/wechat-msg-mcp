@@ -209,7 +209,7 @@ for gid in groups:
 
 如果要做跨月聚合、逐人画像、批量导出这类活，不要用 MCP 工具一轮轮调（慢且吃 token），直接在项目里写脚本：读 decrypted/ 下的明文库，或用 service 层。
 
-项目里已有现成例子可参考：src/report/annual.py 做年度报告，两遍扫描 126 万条 4 秒跑完。
+项目里已有现成例子可参考：scripts/annual_report/annual.py（独立脚本，不属于包），两遍扫描 126 万条 4 秒跑完。
 
 ## 七、CLI 速查
 
@@ -223,7 +223,6 @@ for gid in groups:
 | moments | 朋友圈 |
 | favorites | 收藏 |
 | export | 导出到文件 |
-| report | 年度报告 |
 | status | 数据状态 |
 | sync | 刷新解密与索引 |
 | index | 构建或更新全文索引 |

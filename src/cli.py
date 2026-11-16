@@ -291,16 +291,6 @@ def cmd_favorites(args) -> int:
     return 0
 
 
-def cmd_report(args) -> int:
-    from .report import run as run_report
-
-    svc = _service(args)
-    out = args.out or f"reports/{args.year}"
-    obj = run_report(svc.src, args.year, out)
-    _emit(obj, True, True)
-    return 0 if obj.get("ok") else 1
-
-
 def cmd_export(args) -> int:
     """导出：按 asc 顺序翻页取满，边取边写。"""
     svc = _service(args)
@@ -426,11 +416,6 @@ def build_parser() -> argparse.ArgumentParser:
     ix = sub.add_parser("index", parents=[common], help="构建或更新全文索引")
     ix.add_argument("--rebuild", action="store_true")
     ix.set_defaults(func=cmd_index)
-
-    rp = sub.add_parser("report", parents=[common], help="年度报告")
-    rp.add_argument("--year", type=int, required=True)
-    rp.add_argument("--out", default="")
-    rp.set_defaults(func=cmd_report)
 
     mo = sub.add_parser("moments", parents=[common], help="朋友圈")
     mo.add_argument("--author", default="")

@@ -118,12 +118,8 @@ wechat-msg-mcp/
 │   │   ├── image.py            图片与表情解密（供媒体内联）
 │   │   ├── resource.py         消息到本地落盘文件名的映射（message_resource）
 │   │   └── voice.py            语音转写（供媒体内联）
-│   ├── index/
-│   │   └── __init__.py         FTS5 构建、增量、查询、候选表
-│   └── report/
-│       ├── __init__.py         年度报告入口 run()
-│       ├── annual.py           两遍扫描与六份产物
-│       └── metrics.py          聚合、类型细分、渲染
+│   └── index/
+│       └── __init__.py         FTS5 构建、增量、查询、候选表
 ├── scripts/
 │   ├── __init__.py
 │   ├── decrypt_db.py           通用页级解密
@@ -135,12 +131,17 @@ wechat-msg-mcp/
 │   ├── quick_decrypt.py        日常刷新（增量，--full 全量）
 │   ├── convert_wxecho_keys.py  密钥格式转换
 │   ├── check_sync.py           同步自检
-│   └── check_contact_db.py     联系人库自检
+│   ├── check_contact_db.py     联系人库自检
+│   └── annual_report/          独立年度报告脚本（不属于包，可整目录删除）
+│       ├── __main__.py         命令行入口 python -m scripts.annual_report
+│       ├── annual.py           两遍扫描与六份产物
+│       ├── metrics.py          聚合与渲染
+│       └── tests/              24 项单测
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 111 项）
-├── reports/                    年度报告产物，已忽略
+├── tests/                      单元测试（共 87 项）
+├── reports/                    年报脚本产物，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
 ├── .venv/                      Python 环境，已忽略
@@ -195,4 +196,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；年度报告 4.4 秒跑完 2025 年；111 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。
+重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；87 项单测通过；年度报告已从包与 CLI 移出，需要时跑 scripts/annual_report。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。

@@ -1,13 +1,13 @@
 """年度报告纯计算层的单元测试。
 
-用 python -m unittest discover -s tests -p "test_report_*.py" 运行。
+用 python -m unittest discover -s scripts/annual_report/tests -p "test_*.py" 运行。
 """
 from __future__ import annotations
 
 import unittest
 from datetime import datetime
 
-from src.report.metrics import (
+from scripts.annual_report.metrics import (
     AnnualAggregator,
     chat_kind,
     describe_type,
