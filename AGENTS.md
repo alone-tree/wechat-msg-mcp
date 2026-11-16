@@ -136,7 +136,6 @@ wechat-msg-mcp/
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
 ├── tests/                      单元测试（共 87 项）
-├── reports/                    报告输出，已忽略
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
 ├── .venv/                      Python 环境，已忽略
