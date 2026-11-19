@@ -209,13 +209,23 @@ def _account_dirs() -> list[Path]:
     return out
 
 
+def _variant_order(path: Path) -> tuple:
+    """候选排序：高清 _h → 原图 → 缩略图 _t。"""
+    stem = path.stem
+    if stem.endswith("_h"):
+        return (0, str(path))
+    if stem.endswith("_t"):
+        return (2, str(path))
+    return (1, str(path))
+
+
 def image_locate(
     content: str, chat_id: str = "", local_id: int = 0, create_time: int = 0
 ) -> tuple[list[Path], str]:
     """消息XML -> (本地 .dat 候选路径, 找不到的原因)。
 
     两条来源互相补充：微信 4.x 的新文件只写 message_resource，老文件只写 hardlink，
-    任何一条给出原图都要用上。候选按原图、高清、缩略图的顺序返回。
+    任何一条给出原图都要用上。候选按高清 _h、原图、缩略图 _t 的顺序返回。
     原因取值：no_md5 / hardlink_row_missing / dir_map_missing / file_not_on_disk，成功为空串。
     """
     if not content:
@@ -273,12 +283,12 @@ def image_locate(
 
     if not found:
         return [], reason or "file_not_on_disk"
-    found.sort(key=lambda p: (p.stem.endswith("_t"), str(p)))
+    found.sort(key=_variant_order)
     return found, ""
 
 
 def find_image_dat_bases(content: str) -> list[Path]:
-    """消息XML -> 该消息的图片文件候选路径（原图、高清、缩略图按优先级）。"""
+    """消息XML -> 该消息的图片文件候选路径（高清、原图、缩略图按优先级）。"""
     return image_locate(content)[0]
 
 
@@ -544,13 +554,42 @@ def _decode_dat(dat: Path, aes_key: str, xor_key) -> Optional[bytes]:
     return normalize_to_jpeg(raw)
 
 
+def is_blank_image(data: bytes, threshold: int = 12, sample: int = 16) -> bool:
+    """解码后的图是否整幅纯色。
+
+    微信对 HEVC 长图会把普通 .dat 存成纯白占位图：是合法 JPEG，尺寸也对，
+    只有内容全白。只看「能不能解码」会把占位图当成功结果，必须看像素。
+    做法是压到 16x16 缩略图后看 RGB 极差，纯色图极差接近 0。
+    """
+    if not data:
+        return False
+    try:
+        import io
+
+        from PIL import Image as PILImage
+
+        with PILImage.open(io.BytesIO(data)) as im:
+            im.load()
+            small = im.convert("RGB")
+            small.thumbnail((sample, sample))
+            raw = small.tobytes()
+    except Exception:
+        return False
+    if not raw:
+        return True
+    return max(raw) - min(raw) <= threshold
+
+
 def extract_image_meta(
     content: str, chat_username: str = "", create_time: int = 0, local_id: int = 0
 ) -> tuple[Optional[bytes], str, str]:
     """消息内容 -> (标准化 JPEG 字节, 来源标记, 失败原因)。
 
-    来源标记：dat（原图/高清）、cache（微信渲染缓存）、thumb（小缩略图）。
-    降级顺序按清晰度排：原图/高清 → 渲染缓存 → 缩略图。
+    来源标记：dat（高清/原图）、cache（微信渲染缓存）、thumb（小缩略图）。
+    微信对 HEVC 长图会把普通 .dat 存成纯白占位图（合法 JPEG、尺寸也对），
+    所以每张解出来先判整幅纯色：纯色视为占位，继续试下一个候选；
+    全部候选都纯色时才退回第一个（图本身可能真的就是纯色）。
+    降级顺序：高清 _h → 原图 → 渲染缓存 → 缩略图 _t。
     失败原因原样透出，交给上层写进 media.missing_reason，不再静默返回空。
     """
     keys = load_keys()
@@ -563,23 +602,34 @@ def extract_image_meta(
             xor_key = None
 
     variants, reason = image_locate(content, chat_username, local_id, create_time)
+    blank: list[tuple[bytes, str]] = []
+
+    def _usable(jpeg: Optional[bytes], source: str) -> Optional[bytes]:
+        """非纯色直接可用；纯色记下来当兜底，继续找下一档。"""
+        if not jpeg:
+            return None
+        if is_blank_image(jpeg):
+            blank.append((jpeg, source))
+            return None
+        return jpeg
+
     if aes_key:
         for dat in variants:
             if dat.stem.endswith("_t"):
                 continue
-            jpeg = _decode_dat(dat, aes_key, xor_key)
+            jpeg = _usable(_decode_dat(dat, aes_key, xor_key), "dat")
             if jpeg:
                 return jpeg, "dat", ""
     cached = find_render_cache_image(chat_username, create_time)
     if cached:
-        jpeg = normalize_to_jpeg(cached)
+        jpeg = _usable(normalize_to_jpeg(cached), "cache")
         if jpeg:
             return jpeg, "cache", ""
     if aes_key:
         for dat in variants:
             if not dat.stem.endswith("_t"):
                 continue
-            jpeg = _decode_dat(dat, aes_key, xor_key)
+            jpeg = _usable(_decode_dat(dat, aes_key, xor_key), "thumb")
             if jpeg:
                 return jpeg, "thumb", ""
 
@@ -595,9 +645,11 @@ def extract_image_meta(
                 continue
             blob = _pick_by_meta(dirs, pattern, expect_len, expect_wh, aes_key, xor_key)
             if blob:
-                jpeg = normalize_to_jpeg(blob)
+                jpeg = _usable(normalize_to_jpeg(blob), src)
                 if jpeg:
                     return jpeg, src, ""
+    if blank:
+        return blank[0][0], blank[0][1], ""
     if not aes_key:
         return None, "", reason or "no_image_key"
     if variants:

@@ -79,6 +79,7 @@ transfer red_packet location card voip system revoked。
 媒体处理比纯文本慢：批量取数不要开 include_media，要看图时配合 types 单独查（如 types=["image"]）。
 内联图片总字节超过 6MB 时不内联，改成落盘并给 media.path，media_inline.note 说明还有多少张。
 图片定位三级兜底：message_resource 落盘基名、hardlink 登记表、按消息自带长度与宽高认文件。
+普通 .dat 若是整幅纯白的占位图（微信对 HEVC 长图会这么存），会跳过并改用高清 _h 或缩略图；落到缩略图时 source=thumb。
 
 拿不到媒体时 media 一定带 missing_reason，别猜：no_local_image（原图和缩略图都不在本机，
 这张图从没在微信里打开过，让用户点开一次）、no_local_file、no_image_key、decode_failed、

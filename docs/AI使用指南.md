@@ -101,7 +101,7 @@ path 什么时候出现：图片与视频封面内联时只给字节，不落盘
 | too_many_rows | 条数超过 50 自动跳过，缩小 limit 或加 types 过滤 |
 | not_requested | 这次的调用自己关了 include_media |
 
-图片定位有三条路，命中任一条都算读到：message_resource 的落盘基名、hardlink 登记表、按消息自带的长度与宽高认文件。所以「登记表里没有」不等于「读不到」。
+图片定位有三条路，命中任一条都算读到：message_resource 的落盘基名、hardlink 登记表、按消息自带的长度与宽高认文件。所以「登记表里没有」不等于「读不到」。微信对 HEVC 长图会把普通 .dat 存成整幅纯白的占位图，工具会跳过它改用高清 _h，再不行用缩略图（正常返回，不报 missing_reason）。
 
 只有缩略图时会标 media.source=thumb 并在 media.note 说明。长截图（长宽比超过 3）会切成多段返回，media.tiles 是段数，相邻两段重叠约 80 像素，边界处重复的一两行属正常，不要当成两条内容；整图在 media.path。
 

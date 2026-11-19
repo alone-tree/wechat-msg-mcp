@@ -65,6 +65,16 @@ class HardlinkLocateTest(unittest.TestCase):
         self.assertEqual(reason, "")
         self.assertEqual([p.name for p in paths], ["b" * 32 + ".dat"])
 
+    def test_variant_priority_high_first(self):
+        for suf in ("_h", "_t"):
+            (self.attach / ("b" * 32 + suf + ".dat")).write_bytes(b"x")
+        paths, reason = image.image_locate(f"<md5>{'a' * 32}</md5>")
+        self.assertEqual(reason, "")
+        self.assertEqual(
+            [p.name for p in paths],
+            ["b" * 32 + "_h.dat", "b" * 32 + ".dat", "b" * 32 + "_t.dat"],
+        )
+
     def test_row_missing(self):
         paths, reason = image.image_locate(f"<md5>{'c' * 32}</md5>")
         self.assertEqual(paths, [])

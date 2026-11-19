@@ -135,7 +135,7 @@ wechat-msg-mcp/
 ├── private-docs/               真实数据留存，已忽略，不入库
 │   ├── README.md               规则与索引
 │   └── 业务场景不匹配-真实案例.md
-├── tests/                      单元测试（共 87 项）
+├── tests/                      单元测试（共 94 项）
 ├── exports/                    导出产物，已忽略
 ├── decrypted/                  解密产物约 1.2GB，已忽略
 ├── .venv/                      Python 环境，已忽略
@@ -172,7 +172,7 @@ wechat-msg-mcp/
 | 其他数据面 | 朋友圈 3095 条动态与 1099 条互动；收藏 198 条与 32 个标签；好友地区覆盖 1030/1389 |
 | 不可得字段 | 群管理员、群昵称、@提及结构化标记，三项本地不存在 |
 | 一次性事实 | 群主在 chat_room.owner，群公告在 chat_room_info_detail，群成员在 chatroom_member |
-| 媒体文件定位 | 先查 message_resource.db 的 MessageResourceInfo.packed_info（消息到落盘基名），再查 hardlink 登记表，最后按消息自带长度与宽高认文件；三者都不中才算没有 |
+| 媒体文件定位 | 先查 message_resource.db 的 MessageResourceInfo.packed_info（消息到落盘基名），再查 hardlink 登记表，最后按消息自带长度与宽高认文件；三者都不中才算没有。普通 .dat 可能是纯白占位（HEVC 长图），优先高清 _h，解出来整幅纯色会跳过继续降级 |
 | 长截图 | 长宽比超过 3 的截图保底宽 600，返回时按 1600 高切段、相邻段留 80 像素重叠，避免客户端压成几十像素宽后读不出字，也避免切缝切断一行字 |
 | 索引 | decrypted/_index/search.db，约 135 万条文本、约 400 MB，全量重建 37 到 50 秒 |
 
@@ -190,4 +190,4 @@ wechat-msg-mcp/
 
 ## 六、当前状态
 
-重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；87 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。
+重构已完成阶段 1 到 10，以及 2026-11-14 的消息模型与输出规范：七个 MCP 工具（system、list_entities、get_messages、relations、search、list_moments、list_favorites）全部可用，消息去方向、正文自足、系统消息折叠、群名兜底、三档详细度、分页与导出重做；CLI 入口是 python -m src.cli，默认 NDJSON，新增 groups --members；94 项单测通过。未验证项：群名兜底截断未与微信客户端截图对照（客户端用群昵称，本地只有备注与昵称）。
