@@ -6,7 +6,9 @@
 
 INSTRUCTIONS = """微信聊天记录只读查询（本机数据，不联网）。
 
-开始前先调 system(action="start")，它返回完整使用说明与当前数据状态。
+单群查证、看截图或转写用 MCP。多群盘点、每日增量、跨表匹配优先用本机 CLI：在仓库根运行 `python -m src.cli --help`（可用 `uv run python`）；`groups` 定范围，`export --format ndjson --no-media` 批量取数。没有本机 shell 时，用 MCP `get_messages(output="file", format="ndjson", include_media=false)`，读取全部分片和覆盖回执。
+
+需要命令示例、完整说明或当前数据状态时调 system(action="start")。
 
 六个查询工具：list_entities 列会话与联系人，get_messages 读消息，relations 查关系，
 search 搜索，list_moments 朋友圈，list_favorites 收藏。
@@ -77,7 +79,7 @@ transfer red_packet location card voip system revoked。
 - 文件：自动复制到导出目录，media.path 是副本路径可直接读，source_path 是微信原路径。
 
 媒体处理比纯文本慢：批量取数不要开 include_media，要看图时配合 types 单独查（如 types=["image"]）。
-内联图片总字节超过 6MB 时不内联，改成落盘并给 media.path，media_inline.note 说明还有多少张。
+每次最多发 8 个图块、总计 6MB。超限的原图保存到 media.path（视频封面看 cover_path），回执给原因。inlined 只代表服务发出，客户端未显示时查看路径或缩小查询。
 图片定位三级兜底：message_resource 落盘基名、hardlink 登记表、按消息自带长度与宽高认文件。
 普通 .dat 若是整幅纯白的占位图（微信对 HEVC 长图会这么存），会跳过并改用高清 _h 或缩略图；落到缩略图时 source=thumb。
 
@@ -88,8 +90,8 @@ voice_model_missing、no_audio、too_many_rows、not_requested、budget_exhauste
 media.tiles 是段数，段间约 80 像素重叠，边界重复的一两行属正常；整图在 media.path。
 
 【结果很大时】
-- 超过 200 行或 80KB 自动落盘，只留前 3 条预览，auto_export 给路径与 is_partial。
-- 强制落盘用 output="file"：会按游标翻页取满再写，不只写当前页；is_partial=false 说明全量。
+- auto_export 只保存当前页；messages 是预览，继续查用 next。若有每目标截断警告，翻页也取不全，改用显式导出。
+- output="file" 直接扫描并导出，不给页预览。读 export.files 全部分片和 export.coverage.path。is_partial=false 仅表示没撞行上限；coverage.is_complete 检查请求范围内是否还有解析或读取缺口。未解析、读取失败与确认无匹配是不同状态。
 - format 可选 csv / json / ndjson / md / text / html。md 与 text 按会话分节、一行一条，适合直接给人看。
 - 落盘目录默认本进程的 exports/run-<pid>-<时间>/，12 小时后自动清理；指定位置用 output_dir。
 - 拿到路径后用文件读取工具去读，不要把几千条塞进对话。

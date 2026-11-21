@@ -111,7 +111,7 @@ def cmd_messages(args) -> int:
     if images:
         # CLI 不内联图片字节（转写文字已经写进 text），留在响应里会让 JSON 序列化直接报错
         obj.setdefault("warnings", []).append(
-            f"本次提取了 {len(images)} 项媒体字节，CLI 不内联；要看图请用 MCP，或加 --output file 配合 --include-media 落盘"
+            f"本次提取了 {len(images)} 项媒体字节，CLI 不内联；要看图请用 MCP，或用 export 落盘（默认导出媒体）"
         )
     _warn(obj)
     if args.format in ("text", "md"):
@@ -292,7 +292,7 @@ def cmd_favorites(args) -> int:
 
 
 def cmd_export(args) -> int:
-    """导出：按 asc 顺序翻页取满，边取边写。"""
+    """单遍导出消息及覆盖回执，默认按时间升序。"""
     svc = _service(args)
     result = svc.export_messages(
         out_dir=args.out,
@@ -306,9 +306,8 @@ def cmd_export(args) -> int:
         types=args.types or None,
         keyword=args.keyword,
         order="asc",
-        detail="full",
+        detail=args.detail,
     )
-    result["basis"] = "单遍流式导出（asc）"
     _emit(result)
     return 0 if result.get("exported") else 1
 
@@ -389,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--offset", type=int, default=0)
     q.set_defaults(func=cmd_search)
 
-    e = sub.add_parser("export", parents=[common], help="导出到文件")
+    e = sub.add_parser("export", parents=[common, detail], help="批量导出消息与逐目标回执")
     e.add_argument("--targets", nargs="*", default=[])
     e.add_argument("--sender", default="")
     e.add_argument("--start", default="")

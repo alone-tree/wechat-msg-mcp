@@ -582,6 +582,8 @@ def list_messages(
     if order not in ("desc", "asc"):
         return _error("bad_order", f"未知排序方向: {order}", candidates=["desc", "asc"])
     lo, hi = _ts(start), _ts_end(end)
+    if (start and lo is None) or (end and hi is None) or (lo is not None and hi is not None and lo > hi):
+        return _error("bad_date_range", "日期须为 YYYY-MM-DD，且开始日不能晚于结束日")
     default_window = 0
     if not targets and lo is None and hi is None:
         default_window = _DEFAULT_WINDOW_DAYS
@@ -741,20 +743,18 @@ def list_messages(
                     if order == "asc" and key <= cand_key:
                         continue
                 remaining += 1
+                if trimming and len(bucket) >= cap:
+                    dropped[bucket_key] = dropped.get(bucket_key, 0) + 1
                 if order == "desc":
                     if len(bucket) < cap:
                         heapq.heappush(bucket, (key, row))
                     elif key > bucket[0][0]:
                         heapq.heapreplace(bucket, (key, row))
-                    elif trimming:
-                        dropped[bucket_key] = dropped.get(bucket_key, 0) + 1
                 else:
                     if len(bucket) < cap:
                         heapq.heappush(bucket, (_Rev(key), row))
                     elif key < bucket[0][0].key:
                         heapq.heapreplace(bucket, (_Rev(key), row))
-                    elif trimming:
-                        dropped[bucket_key] = dropped.get(bucket_key, 0) + 1
         finally:
             conn.close()
 
@@ -771,7 +771,7 @@ def list_messages(
     want_media = include_media and len(page) <= MEDIA_MAX_ROWS
     images: list[dict] = []
     media_missing: dict = {}
-    for row in page:
+    for message_index, row in enumerate(page):
         if not row["chat_name"]:
             row["chat_name"] = name_by_id.get(row["chat_id"], row["chat_id"])
         _enrich_media(src, row)
@@ -799,6 +799,7 @@ def list_messages(
                         images.append(
                             {
                                 "local_id": row["local_id"],
+                                "message_index": message_index,
                                 "kind": "voice",
                                 "source": "silk",
                                 "bytes": blob,
@@ -818,6 +819,7 @@ def list_messages(
                     images.append(
                         {
                             "local_id": row["local_id"],
+                            "message_index": message_index,
                             "kind": kind,
                             "source": source,
                             "bytes": data,
@@ -1053,6 +1055,7 @@ def export_stream(
     detail: str = "full",
     media_dir: str = "",
     media_limit: int = 500,
+    max_rows: Optional[int] = None,
 ):
     """导出专用：每张会话表只扫一遍，按时间顺序流式产出消息。
 
@@ -1070,6 +1073,10 @@ def export_stream(
     if order not in ("asc", "desc"):
         raise ValueError(f"未知排序方向: {order}，可选 asc 或 desc")
     lo, hi = _ts(start), _ts_end(end)
+    if (start and lo is None) or (end and hi is None) or (lo is not None and hi is not None and lo > hi):
+        raise ValueError("日期须为 YYYY-MM-DD，且开始日不能晚于结束日")
+    if max_rows is not None and max_rows < 1:
+        raise ValueError("导出行上限须大于 0")
     tags, mains, unknown_types = _wanted_types(types)
     if unknown_types:
         raise ValueError(f"无法识别的类型过滤: {'、'.join(unknown_types)}")
@@ -1086,22 +1093,42 @@ def export_stream(
         return contacts.name_of(wxid) or ""
 
     unresolved: list[dict] = []
+    requests: list[dict] = []
+    states: dict[str, dict] = {}
+    read_errors: list[dict] = []
     jobs: list[tuple[Optional[str], Optional[str], Path, str]] = []
     if targets:
         for t in targets:
-            hit = resolve_name(src, t, limit=3)
-            if not hit.get("candidates"):
-                unresolved.append({"input": t, "reason": "not_found", "candidates": []})
-                continue
-            best = hit["candidates"][0]
-            tables = resolve_tables(src, best["id"])
-            if not tables:
-                unresolved.append(
-                    {"input": t, "reason": "no_message_table", "candidates": hit["candidates"]}
-                )
-                continue
-            for db, tbl in tables:
-                jobs.append((best["id"], best.get("name", ""), db, tbl))
+            candidates = resolve_name(src, t, limit=3).get("candidates") or []
+            by_id = next((c for c in candidates if c["id"].casefold() == t.strip().casefold()), None)
+            reason = ""
+            if by_id:
+                best = by_id
+            elif t.strip().endswith("@chatroom"):
+                # 群已经离开联系人表时，分库仍可能留有同一 ID 的历史消息。
+                best = {"id": t.strip(), "name": t.strip()}
+            elif not candidates:
+                reason = "not_found"
+            elif len(candidates) != 1:
+                reason = "ambiguous"
+            elif candidates[0].get("matched") == "similar":
+                reason = "similar_only"
+            else:
+                best = candidates[0]
+            entry = {"input": t}
+            requests.append(entry)
+            if not reason:
+                cid = best["id"]
+                entry.update(chat_id=cid, chat_name=best.get("name", ""))
+                if cid not in states:
+                    tables = list(dict.fromkeys(resolve_tables(src, cid)))
+                    states[cid] = {"remaining": len(tables), "rows": 0, "tables": len(tables), "failed": False}
+                    jobs.extend((cid, best.get("name", ""), db, tbl) for db, tbl in tables)
+                if not states[cid]["tables"]:
+                    reason = "no_message_table"
+            if reason:
+                entry.update(status="unresolved", reason=reason, rows=0)
+                unresolved.append({"input": t, "reason": reason, "candidates": candidates})
     else:
         pairs = index.tables_in_range(src, lo, hi, mains)
         if pairs is None:
@@ -1135,8 +1162,9 @@ def export_stream(
     }
 
     def one_job(cid: Optional[str], cname: Optional[str], db: Path, tbl: str):
-        conn = connect_ro(db)
+        conn = None
         try:
+            conn = connect_ro(db)
             md5_to_user, sender_map = _db_maps(db, conn)
             real_cid = cid or md5_to_user.get(tbl[4:] if tbl.startswith("Msg_") else "")
             real_cname = cname if cid else name_by_id.get(real_cid, real_cid)
@@ -1168,11 +1196,17 @@ def export_stream(
                         continue
                 if kw and kw not in (row["text"] or "").lower():
                     continue
-                if media_root is not None:
-                    _save_row_media(src, row, media_root, budget)
-                yield _sort_key(row), _project(row, detail, show_chat)
+                yield _sort_key(row), row
+        except (sqlite3.Error, OSError):
+            read_errors.append({"chat_id": cid, "db": db.name, "reason": "message_table_read_failed"})
+            if cid in states:
+                states[cid]["failed"] = True
+        else:
+            if cid in states:
+                states[cid]["remaining"] -= 1
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     generators = [one_job(cid, cname, db, tbl) for cid, cname, db, tbl in jobs]
     if not generators:
@@ -1189,8 +1223,36 @@ def export_stream(
         "unresolved": unresolved,
         "tables": len(jobs),
         "media": budget,
+        "requests": requests,
+        "read_errors": read_errors,
+        "is_partial": False,
     }
-    return (row for _key, row in merged), meta
+
+    def stream():
+        try:
+            for i, (_key, row) in enumerate(merged):
+                if max_rows is not None and i >= max_rows:
+                    meta["is_partial"] = True
+                    break
+                if row["chat_id"] in states:
+                    states[row["chat_id"]]["rows"] += 1
+                if media_root is not None:
+                    _save_row_media(src, row, media_root, budget)
+                yield _project(row, detail, show_chat)
+        finally:
+            for gen in generators:
+                gen.close()
+            for entry in requests:
+                if entry.get("status") == "unresolved":
+                    continue
+                state = states[entry["chat_id"]]
+                entry["rows"] = state["rows"]
+                entry["status"] = (
+                    "read_error" if state["failed"] else "partial" if state["remaining"] else
+                    "complete" if state["rows"] else "empty"
+                )
+
+    return stream(), meta
 
 
 def _tables_of(db: Path) -> list[str]:

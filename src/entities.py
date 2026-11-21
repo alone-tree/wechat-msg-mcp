@@ -638,12 +638,12 @@ def groups_by_members(
                         "candidates": ambiguous,
                     }
                 )
-    if not wanted:
+    if not wanted or (require_all and unresolved):
         return {
             "ok": False,
             "error": {
-                "code": "no_valid_members",
-                "message": "没有一个成员名被解析到，无法按成员找群",
+                "code": "members_unresolved" if wanted else "no_valid_members",
+                "message": "缺少唯一匹配的成员，无法按原条件找群；请先核对候选 ID",
                 "candidates": [],
             },
             "unresolved": unresolved,

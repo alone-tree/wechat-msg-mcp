@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import os
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -19,37 +21,51 @@ class Service:
         self.src = LocalSource(Path(root) if root else get_decrypted_dir())
         self.auto_refresh = auto_refresh
 
+    def _refresh_snapshot_guard(self) -> Optional[dict]:
+        from .config import DEFAULT_DECRYPTED_DIR, PROJECT_ROOT
+
+        root = self.src.root.resolve()
+        default = DEFAULT_DECRYPTED_DIR.resolve()
+        if root == default:
+            return None
+        protected = (PROJECT_ROOT / "exports", default / "exports")
+        if (os.environ.get("WECHAT_REFRESH_CUSTOM_ROOT") != "1"
+                or any(root.is_relative_to(p.resolve()) for p in protected)):
+            return {"refreshed": False, "skipped": "snapshot_root",
+                    "error": "当前根目录按只读副本处理，未从真实微信刷新数据"}
+        return None
+
     def _fresh(self, force: bool = False) -> dict:
         """查询前的按需刷新，失败不阻断查询。"""
         if not self.auto_refresh:
             return {"refreshed": False, "skipped": "disabled"}
-        return freshness.ensure(self.src, force=force)
+        blocked = self._refresh_snapshot_guard()
+        return blocked if blocked else freshness.ensure(self.src, force=force)
 
     def ensure_fresh(self, force: bool = False) -> dict:
         """对外暴露的刷新入口，供 CLI 的 --fresh 与 sync 工具使用。"""
         return self._fresh(force)
 
-    def _with_fresh(self, result: dict, force: bool = False) -> dict:
-        if isinstance(result, dict):
-            result["refresh"] = self._fresh(force)
+    def _query(self, read, *args, **kwargs) -> dict:
+        refresh = self._fresh()
+        result = read(self.src, *args, **kwargs)
+        result["refresh"] = refresh
         return result
 
     # 实体
     def list_entities(self, **kwargs) -> dict:
-        return self._with_fresh(entities.list_entities(self.src, **kwargs))
+        return self._query(entities.list_entities, **kwargs)
 
     def resolve(self, name: str, limit: int = 5) -> dict:
         return entities.resolve_name(self.src, name, limit=limit)
 
     def groups_by_members(self, members: list[str], limit: int = 20, require_all: bool = True) -> dict:
         """按成员组合找群，CLI 的 groups 子命令用。"""
-        return self._with_fresh(
-            entities.groups_by_members(self.src, members, limit=limit, require_all=require_all)
-        )
+        return self._query(entities.groups_by_members, members, limit=limit, require_all=require_all)
 
     # 消息
     def get_messages(self, **kwargs) -> dict:
-        return self._with_fresh(messages.list_messages(self.src, **kwargs))
+        return self._query(messages.list_messages, **kwargs)
 
     def export_messages(
         self,
@@ -66,7 +82,9 @@ class Service:
         """
         from . import export
 
-        limit_rows = int(kwargs.pop("max_rows", 200000) or 200000)
+        limit_rows = int(kwargs.pop("max_rows", 200000))
+        out_dir = str(Path(out_dir).resolve()) if out_dir else ""
+        refresh = self._fresh()
         media_root = ""
         if with_media:
             base = Path(out_dir) if out_dir else export.run_dir()
@@ -75,32 +93,43 @@ class Service:
         if detail == "lite":
             # 导出要能分辨会话与类型，lite 不带 chat_name 与 type
             detail = "full"
+        query = {
+            "sender": kwargs.get("sender", ""),
+            "start": kwargs.get("start", ""),
+            "end": kwargs.get("end", ""),
+            "types": kwargs.get("types"),
+            "keyword": kwargs.get("keyword", ""),
+            "order": kwargs.get("order") or "asc",
+            "detail": detail,
+        }
         try:
             stream, meta = messages.export_stream(
-                self.src,
-                targets=kwargs.get("targets"),
-                sender=kwargs.get("sender", ""),
-                start=kwargs.get("start", ""),
-                end=kwargs.get("end", ""),
-                types=kwargs.get("types"),
-                keyword=kwargs.get("keyword", ""),
-                order=kwargs.get("order") or "asc",
-                detail=detail,
-                media_dir=media_root,
-                media_limit=media_limit,
+                self.src, targets=kwargs.get("targets"), **query,
+                media_dir=media_root, media_limit=media_limit, max_rows=limit_rows,
             )
         except ValueError as exc:
             return {
                 "ok": False,
                 "error": {"code": "bad_argument", "message": str(exc)},
             }
-        rows: list[dict] = []
-        partial = False
-        for row in stream:
-            rows.append(row)
-            if len(rows) >= limit_rows:
-                partial = True
-                break
+        if not meta["data_until"]:
+            return {
+                "ok": False, "error": {"code": "no_message_db", "message": "本地没有可读的消息分库"},
+                "refresh": refresh,
+            }
+        rows = list(stream)
+        partial = meta["is_partial"]
+        requests = meta["requests"]
+        read_errors = meta["read_errors"]
+        coverage = {
+            "scope": "explicit_targets" if requests else "local_messages",
+            "is_complete": not (partial or meta["unresolved"] or read_errors),
+            "requested": len(requests),
+            "resolved_unique": len({r["chat_id"] for r in requests if r["status"] != "unresolved"}),
+            "by_status": dict(Counter(r["status"] for r in requests)),
+            "read_errors": len(read_errors),
+            "query": {**query, "with_media": with_media, "max_rows": limit_rows},
+        }
         envelope = {
             "ok": True,
             "detail": meta["detail"],
@@ -113,14 +142,25 @@ class Service:
         result = export.write_rows(
             rows, fmt=fmt, out_dir=out_dir, prefix="messages", kind="messages", envelope=envelope
         )
+        receipt = export.write_json(
+            {**coverage, "targets": requests, "unresolved": meta["unresolved"], "read_errors": read_errors,
+             "data_until": meta["data_until"], "refresh": refresh, "files": result["files"]},
+            out_dir=out_dir, prefix="messages-coverage",
+        )
         result.update(
             {
+                "ok": True,
                 "is_partial": partial,
                 "basis": "单遍顺序流式导出",
-                "tables": meta.get("tables"),
-                "unresolved": meta.get("unresolved") or [],
+                "tables": meta["tables"],
+                "unresolved": meta["unresolved"],
+                "data_until": meta["data_until"],
+                "refresh": refresh,
+                "coverage": {**coverage, "path": receipt["path"]},
             }
         )
+        if not coverage["is_complete"] and not partial:
+            result["note"] = "有目标未解析或读取失败；零行不代表未发言，见 coverage.path"
         media = meta.get("media") or {}
         if media_root and media.get("saved"):
             result["media_export"] = {
@@ -150,6 +190,7 @@ class Service:
 
     def relations(self, kind: str, subject: str, **kwargs) -> dict:
         offset = kwargs.get("offset", 0) or 0
+        refresh = self._fresh()
         if kind == "group_members":
             result = relations.group_members(
                 self.src, subject, limit=kwargs.get("limit", 500), offset=offset
@@ -178,22 +219,23 @@ class Service:
             )
         else:
             result = {"error": f"未知关系类型: {kind}"}
-        return self._with_fresh(result)
+        result["refresh"] = refresh
+        return result
 
     # 搜索
     def search(self, query: str, **kwargs) -> dict:
-        return self._with_fresh(search_mod.search(self.src, query, **kwargs))
+        return self._query(search_mod.search, query, **kwargs)
 
     # 朋友圈与收藏
     def list_moments(self, **kwargs) -> dict:
         from .moments import list_moments
 
-        return self._with_fresh(list_moments(self.src, **kwargs))
+        return self._query(list_moments, **kwargs)
 
     def list_favorites(self, **kwargs) -> dict:
         from .favorites import list_favorites
 
-        return self._with_fresh(list_favorites(self.src, **kwargs))
+        return self._query(list_favorites, **kwargs)
 
     # 同步与索引
     def status(self) -> dict:
@@ -208,10 +250,11 @@ class Service:
         return info
 
     def refresh(self, force: bool = True) -> dict:
-        result = freshness.ensure(self.src, force=force, update_index=True)
+        blocked = self._refresh_snapshot_guard()
+        result = blocked if blocked else freshness.ensure(self.src, force=force, update_index=True)
         if not isinstance(result, dict):
             return {"ok": False, "error": {"code": "refresh_failed", "message": "刷新没有返回结果"}}
-        failed = result.get("skipped") in ("error", "no_source", "no_keys")
+        failed = result.get("skipped") in ("error", "no_source", "no_keys", "snapshot_root")
         result["ok"] = not failed
         if failed and result.get("error"):
             result["error"] = {

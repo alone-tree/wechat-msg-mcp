@@ -14,6 +14,7 @@ AUTO_EXPORT_BYTES = 80000
 # 单次返回体上限：内联图片会让响应膨胀，超了宿主会直接断连接，需要重新 load。
 # 图片原始字节预算：base64 传输膨胀约 4/3，6MB 原始字节约合 8MB 传输体积。
 INLINE_IMAGE_BUDGET = 6_000_000
+INLINE_IMAGE_BLOCKS = 8
 EXPORT_KEYS = ("messages", "entities", "items", "moments", "members", "groups", "by_day")
 # 这些是信封的说明性字段，不当作数据集合另存
 _ENVELOPE_NOISE = {
@@ -194,6 +195,16 @@ def _export_videos(obj: dict, target) -> dict:
     return {"exported": done, "skipped": skipped, "dir": str(target)}
 
 
+def _media_for(obj: dict, image: dict):
+    rows = obj.get("messages") or []
+    index = image.get("message_index")
+    if index is not None:
+        return rows[index].get("media") if 0 <= index < len(rows) else None
+    # 兼容没有页内位置的调用方，但同序号有重名时不猜。
+    matches = [m for m in rows if m.get("id", m.get("local_id")) == image.get("local_id")]
+    return matches[0].get("media") if len(matches) == 1 else None
+
+
 def _save_images(obj: dict, images: list, src, target=None) -> int:
     """把图片字节全部落盘，并把路径回填到对应消息的 media。返回落盘张数。"""
     if not images:
@@ -201,16 +212,15 @@ def _save_images(obj: dict, images: list, src, target=None) -> int:
     from . import export, media_inline
 
     out_dir = Path(target) if target else export.run_dir() / "media"
-    by_id = {m.get("id", m.get("local_id")): m for m in obj.get("messages") or []}
     saved = 0
     for img in images:
         if img.get("kind") == "voice":
             info = media_inline.save_voice(img["bytes"], Path(target).parent / "voice" if target else export.run_dir() / "voice")
         else:
             info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), out_dir)
-        m = by_id.get(img.get("local_id"))
-        if m is not None and isinstance(m.get("media"), dict):
-            m["media"][_path_key(img.get("kind") or "image")] = info["path"]
+        media = _media_for(obj, img)
+        if isinstance(media, dict):
+            media[_path_key(img.get("kind") or "image")] = info["path"]
         saved += 1
     return saved
 
@@ -240,16 +250,15 @@ def _tiles_for(
             step = tile_height - overlap
             n = -(-(h - overlap) // step)
             if n > max_tiles:
-                # 段数超上限时拉大跨步，宁可每段更长也不丢内容
-                step = -(-(h - tile_height) // max(1, max_tiles - 1))
-                n = -(-(h - tile_height) // step) + 1 if h > tile_height else 1
-                n = min(max_tiles, n)
+                # 不能只拉大跨步，否则段与段之间会漏掉内容。
+                if max_tiles < 2:
+                    return []
+                step = -(-(h - overlap) // max_tiles)
+                tile_height = step + overlap
             out = []
             top = 0
             while top < h and len(out) < max_tiles:
                 bottom = min(h, top + tile_height)
-                if bottom - top < 40:
-                    break
                 tile = im.crop((0, top, w, bottom))
                 buf = io.BytesIO()
                 tile.convert("RGB").save(buf, format="JPEG", quality=85)
@@ -263,71 +272,61 @@ def _tiles_for(
 
 
 def _inline_images(obj: dict, images: list, src) -> tuple[list, dict]:
-    """按体积预算内联图片。超预算的不内联，落盘后给路径。"""
+    """限制工具发出的图片块；图片缺席时沿消息里的路径读文件。"""
+    from collections import Counter
+
     from mcp.server.fastmcp.utilities.types import Image
 
-    from . import media_inline
+    from . import export, media_inline
 
-    by_id = {m.get("id", m.get("local_id")): m for m in obj.get("messages") or []}
     blocks: list = []
     used = 0
-    overflow: list = []
+    overflow: Counter = Counter()
     for img in images:
-        if img.get("kind") == "voice":
+        kind = img.get("kind") or "image"
+        if kind == "voice":
             continue
-        size = len(img["bytes"])
-        tiles = _tiles_for(img["bytes"]) if img.get("kind") != "voice" else []
-        cost = sum(len(x) for x in tiles) if tiles else size
-        if used + cost <= INLINE_IMAGE_BUDGET:
-            used += cost
-            for tile in tiles or [img["bytes"]]:
-                blocks.append(Image(data=tile, format="jpeg"))
-            m = by_id.get(img.get("local_id"))
-            if m is not None and isinstance(m.get("media"), dict):
-                m["media"]["inlined"] = True
-                if tiles:
-                    from . import export
-
-                    info = media_inline.save_jpeg(
-                        src, img["bytes"], "full", export.run_dir() / "media"
-                    )
-                    m["media"]["tiles"] = len(tiles)
-                    m["media"][_path_key(img.get("kind") or "image")] = info["path"]
-                    m["media"]["note"] = (
-                        f"长截图已切成 {len(tiles)} 段按顺序返回，相邻两段有约 80 像素重叠，"
-                        "重复的一两行属正常；整图另存 media.path 便于核对"
-                    )
+        media = _media_for(obj, img)
+        tiles = _tiles_for(img["bytes"], max_tiles=INLINE_IMAGE_BLOCKS)
+        payload = tiles or [img["bytes"]]
+        cost = sum(map(len, payload))
+        reason = ""
+        if len(blocks) + len(payload) > INLINE_IMAGE_BLOCKS:
+            reason = "image_block_limit"
+        elif used + cost > INLINE_IMAGE_BUDGET:
+            reason = "image_byte_limit"
+        if reason:
+            overflow[reason] += 1
         else:
-            overflow.append(img)
-
-    if overflow:
-        from . import export
-
-        target = export.run_dir() / "media"
-        for img in overflow:
-            info = media_inline.save_jpeg(src, img["bytes"], img.get("kind", "image"), target)
-            m = by_id.get(img.get("local_id"))
-            if m is not None and isinstance(m.get("media"), dict):
-                m["media"]["inlined"] = False
-                m["media"][_path_key(img.get("kind") or "image")] = info["path"]
+            used += cost
+            blocks.extend(Image(data=tile, format="jpeg") for tile in payload)
+        if isinstance(media, dict):
+            media["inlined"] = not reason
+            if reason:
+                media["not_inlined_reason"] = reason
+            if tiles and not reason:
+                media["tiles"] = len(tiles)
+                media["note"] = "图块按顺序返回，段间有重叠；另存整图便于核对"
+        if reason or tiles:
+            info = media_inline.save_jpeg(src, img["bytes"], "full" if tiles else kind, export.run_dir() / "media")
+            if isinstance(media, dict):
+                media[_path_key(kind)] = info["path"]
 
     stats = {
         "inlined": len(blocks),
         "inlined_bytes": used,
-        "not_inlined": len(overflow),
+        "not_inlined": sum(overflow.values()),
         "image_budget_bytes": INLINE_IMAGE_BUDGET,
+        "image_budget_blocks": INLINE_IMAGE_BLOCKS,
+        "not_inlined_by_reason": dict(overflow),
+        "note": "inlined 是工具发出的图块数，不代表客户端已接收。未显示时查看 media.path / media.cover_path 或缩小范围。",
     }
-    if overflow:
-        stats["note"] = (
-            f"另有 {len(overflow)} 张图片因返回体体积上限未内联，"
-            "已保存为本地文件，media.path 可直接读取"
-        )
     return blocks, stats
 
 
 def _export_messages_full(svc, kwargs: dict, out_dir: str, fmt: str) -> dict:
-    """output=file：翻页取满再落盘，实现见 Service.export_messages。"""
-    return svc.export_messages(out_dir=out_dir, fmt=fmt, **kwargs)
+    """显式导出使用服务层单遍扫描，不先查预览页。"""
+    return svc.export_messages(out_dir=out_dir, fmt=fmt, with_media=kwargs["include_media"], **kwargs)
 
 def register(mcp, get_service) -> None:
     @mcp.tool()
@@ -382,7 +381,13 @@ def register(mcp, get_service) -> None:
                     "index_rows": idx.get("rows"),
                     "index_size_mb": idx.get("size_mb"),
                 },
-                "next": "直接调用其余六个查询工具；要立刻拿最新数据调 system(action=\"sync\")。",
+                "next": "批量取数优先用本机 CLI；少量查证调用查询工具；需要立刻刷新时调 system(action=\"sync\")。",
+                "cli": {
+                    "entry": "python -m src.cli",
+                    "cwd": str(Path(__file__).resolve().parents[1]),
+                    "discover": "groups --members 人甲 人乙 --json",
+                    "export": "export --targets 群ID --start YYYY-MM-DD --end YYYY-MM-DD --format ndjson --no-media --out exports/batch",
+                },
             }
         )
 
@@ -455,10 +460,10 @@ def register(mcp, get_service) -> None:
         output_dir: str = "",
         extract_media: str = "",
     ) -> list:
-        """读取聊天消息，默认返回最新的一批。
+        """读微信消息与核读证据。多群统计、每日增量或交叉匹配优先用本机 CLI `python -m src.cli export`；按成员找候选群用 `groups --members`。没有 shell 时用本工具 output=file 导出 NDJSON，再用脚本处理文件。
 
         Args:
-            targets: 会话名或 ID 列表，可混人与群；留空则取最近 30 天全部会话
+            targets: 会话名或 ID 列表，批量请用稳定 ID；inline 无目标无日期时默认最近 30 天；file 不加日期会扫描更广，优先显式给范围
             sender: 发言人，支持 wxid、备注或昵称
             start_date: 开始日期 YYYY-MM-DD
             end_date: 结束日期 YYYY-MM-DD
@@ -472,10 +477,9 @@ def register(mcp, get_service) -> None:
                 sender_id/type/chat_id/chat_name/senders；raw 追加 local_type 与原文
             per_target_limit: 多会话查询时每个会话最多取多少条，0 表示不单独限制；
                 截断会在 warnings 里点名
-            output: inline 直接返回，file 翻页取满后落盘
-            format: 落盘格式 csv/json/ndjson/md/text/html
-            include_media: 默认开。图片、表情、视频封面直接内联返回，语音给转写文字；
-                返回条数超过 50 条时自动跳过媒体提取（那种量级会被截成预览）
+            output: inline 分页，file 单遍导出且无预览；file 不用 limit、cursor、per_target_limit，读取 export.files 与 export.coverage.path
+            format: 落盘格式 csv/json/ndjson/md/text/html，脚本优先 ndjson
+            include_media: 默认开。inline 在预算内嵌入图片，语音给转写；超过 50 条不提取。file 生成媒体文件而不内联；纯文本批量取数传 false
             output_dir: 结果落盘目录，留空写本进程的 exports/run-* 目录
             extract_media: 额外把媒体原文件存到文件；留空不存，auto 存到本进程导出目录，也可传绝对目录
 
@@ -498,19 +502,25 @@ def register(mcp, get_service) -> None:
             include_media=include_media,
             detail=detail,
         )
+        if output == "file":
+            exported = _export_messages_full(svc, kwargs, output_dir, format)
+            if not exported.get("ok", True):
+                return _dumps(exported)
+            return _dumps({
+                "ok": True,
+                "mode": "file",
+                "data_until": exported["data_until"],
+                "refresh": exported["refresh"],
+                "unresolved": exported["unresolved"],
+                "export": exported,
+                "hint": "读取 export.files 全部分片及 export.coverage.path；本响应没有分页预览。",
+            })
+        if output != "inline":
+            return _dumps({"ok": False, "error": {"code": "bad_output", "message": "output 只支持 inline 或 file"}})
         obj = svc.get_messages(**kwargs)
         if not obj.get("ok", True):
             return _dumps(obj)
         images = obj.pop("_images", None) or []
-
-        if output == "file":
-            exported = _export_messages_full(svc, kwargs, output_dir, format)
-            _trim_preview(obj, ("messages",), 3)
-            obj["export"] = exported
-            obj.setdefault("warnings", []).append(
-                "output=file 只导出文本；要看图请单独查并传 include_media 或 extract_media"
-            )
-            return _dumps(obj)
 
         from . import export as export_mod
 

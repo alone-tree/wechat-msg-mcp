@@ -22,7 +22,7 @@
 
 ## 命令行
 
-MCP 是同参同义的薄壳，脚本场景直接用 CLI，默认输出 NDJSON，接管道与循环最省事：
+在项目根运行。多群盘点、每日增量、交叉匹配优先用 CLI；少量查证和看截图用 MCP。两端共用消息导出；脚本读取所有 `files` 并用 `coverage.path` 核对逐群状态。更多示例见 [AI 使用指南](docs/AI使用指南.md#六复杂查询两种编排方式)。
 
 ```powershell
 python -m src.cli messages --targets 某群 --start 2026-11-01 --limit 100

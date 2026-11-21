@@ -4,7 +4,9 @@
 
 仅本人私下使用，不考虑兼容别人的环境。仍然保持公开仓库。
 
-新会话的第一件事是读本文件，然后读 docs/索引.md，再按主题进入对应主文档。
+取数入口：多群盘点、每日增量或跨表匹配，先用本仓库 CLI `uv run python -m src.cli --help`（已有环境可用 `.venv/Scripts/python.exe`）。用 `groups --members` 找候选，用 `export --format ndjson --no-media` 一次取数，读完 `files` 和 `coverage.path` 再统计。MCP 用于查证截图、语音和少量消息；没有 shell 时也可用 MCP 显式导出。封装缺少所需字段时再考虑只读 SQL，并记录差异。命令和核对步骤见 [AI 使用指南](docs/AI使用指南.md#六复杂查询两种编排方式)。
+
+新会话先读本文件和 [文档索引](docs/索引.md)，再按主题进入对应主文档。
 
 ## 一、设计信条
 
@@ -156,7 +158,7 @@ wechat-msg-mcp/
 | 刷新机制 | 查询前按 TTL（默认 60 秒）增量刷新，失败降级不阻断 |
 | 导出 | 每进程写 exports/run-<pid>-<时间>/，12 小时自动清理；AI 可用 output_dir 指定目录，指定目录不清理。导出走单遍流式：每张会话表只读一次、按时间顺序产出，30 万条的群约 6.5 秒，20 万行上限 |
 | 导出媒体 | CLI 导出默认把图片、表情、视频封面落 media-export/media，语音转 WAV 落 voice，视频 mp4 落 video，文件消息落 files；media.path 指副本，默认上限 500 个，--media-limit 改、--no-media 关 |
-| 媒体内联 | include_media=true 时图片、表情、视频封面以图片内容直接返回，语音给转写文字；内联预算 6MB，超出部分落盘给路径 |
+| 媒体内联 | include_media=true 时图片、表情、视频封面以图片内容直接返回，语音给转写文字；内联上限 8 个图块且总计 6MB，超出部分落盘给路径 |
 | 消息字段 | 不带收发方向；from 是显示名（自己固定「我」，系统消息为空），text 自足；lite/full/raw 三档，MCP 默认 lite、CLI 默认 full |
 | 系统消息 | 默认折叠成「[系统] 一句话」，原始 XML 只在 raw 档；拍一拍归 system |
 | 群名兜底 | 备注 > 群昵称 > 成员昵称拼接（等 N 人）>「群聊」；name_source 标明来源，未与客户端截图对照 |

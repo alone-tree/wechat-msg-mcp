@@ -231,9 +231,7 @@ inline 模式下若 JSON 文本超过 80000 字符（字符不是字节，中文
 | AI 指定目录 | 写到 output_dir 指定位置，不参与自动清理 |
 | 文件名 | 前缀-时间戳-序号.格式，同秒不撞名 |
 
-返回里的 export 或 auto_export 含 path、files、rows、bytes、format、columns、is_partial、basis、tables；auto_export 多一个 reason，主表之外还有旁挂集合时另给 extra 与 extra_collections。
-
-output=file 时工具单遍流式导出：每张会话表只读一次、按时间顺序产出，多会话用堆归并，30.2 万条的群实测 6.5 秒；is_partial=true 表示撞到 20 万行上限没取全，可以用时间段或 targets 分批。导出固定 full 档（lite 自动升级），保证 CSV 里有 chat_name 与 type。
+消息 `output=file` 直接落盘，读 `export.files` 全部分片与 `export.coverage.path`。`auto_export` 只落当前页，仍要检查分页和每目标上限。字段语义与 CLI 操作见 [AI 使用指南 §5–6](docs/AI使用指南.md#五结果太大怎么办)。
 
 想看最近导出了什么，直接列出 exports/ 下最新的 run 目录即可。
 
@@ -256,9 +254,14 @@ python -m src.cli moments --limit 20
 python -m src.cli moments --author 某人 --since 2026-01-01
 python -m src.cli favorites --type link --limit 10
 python -m src.cli favorites --tag 学习
-python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out 某目录
+python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out exports/mine
+python -m src.cli index --rebuild
+python -m src.cli status --json
+python -m src.cli sync
+python -m src.cli resolve 旧群名
+```
 
-导出会自动把媒体落成真实文件，不走内联（AI 拿到的是路径，不是字节）：
+多群统计、每日增量、跨表匹配先走 CLI，详细配方见 [AI 使用指南 §6](docs/AI使用指南.md#六复杂查询两种编排方式)。导出默认把媒体落成真实文件，不走内联：
 
 | 类型 | 落盘位置 | 说明 |
 |---|---|---|
@@ -269,12 +272,7 @@ python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --
 
 media.path 在导出的每一行里都指向副本路径，能直接读；拿不到时同位置给 missing_reason（no_local_image、no_local_file、no_local_video、decode_failed、media_limit_reached 等）。
 
-默认最多存 500 个，--media-limit 改数量（0 表示不限），--no-media 完全关掉。返回值里的 media_export 给 dir、images、voice、video_covers、video_files、files、saved、skipped、missing、limit。
-python -m src.cli index --rebuild
-python -m src.cli status --json
-python -m src.cli sync
-python -m src.cli resolve 旧群名
-```
+CLI 默认最多提取 500 个媒体文件，`--media-limit` 改上限，`--no-media` 关提取。MCP 文件模式用 `include_media=false` 关提取。
 
 入口固定是 python -m src.cli（本机也可写 .venv\Scripts\python.exe -m src.cli），没有 wechatq 可执行文件。
 
@@ -298,6 +296,8 @@ python -m src.cli resolve 旧群名
 |---|---|
 | --fresh | 无视 TTL，执行前先刷一次 |
 | --no-fresh | 本次不自动刷新，用现有数据（适合脚本连续跑多条） |
+
+用 `--root` 或 `WECHAT_DECRYPTED_DIR` 指定的非默认目录按固定副本读取，若真正用于生产刷新需显式设 `WECHAT_REFRESH_CUSTOM_ROOT=1`；`exports/` 与 `decrypted/exports/` 始终禁止刷新。
 
 ## 六、索引
 

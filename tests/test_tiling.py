@@ -54,6 +54,7 @@ class TilingTest(unittest.TestCase):
         tiles = _tiles_for(_long_png(400, 20000), tile_height=1600, max_tiles=6)
         self.assertLessEqual(len(tiles), 6)
         self.assertGreater(len(tiles), 1)
+        self.assertEqual(sum(h for _, h in _sizes(tiles)), 20000 + (len(tiles) - 1) * 80)
 
 
 if __name__ == "__main__":

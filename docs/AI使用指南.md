@@ -83,7 +83,7 @@ include_media 在 MCP 工具里默认 true；CLI 要显式加 --include-media，
 
 media 也随 detail 伸缩：lite 只留摘要（文件名、链接标题），size、path、exists、链接描述这些要 full 档才有。所以拿不到路径时先看是不是还停在 lite。
 
-媒体内联有体积预算：图片总字节超过 6MB 时，超出的不内联，改成落盘给路径，media_inline.note 会说明还有几张。这是为了避免响应体过大导致连接断开。
+每次最多内联 8 个图块或 6MB。溢出的图片另存本地；检查 `media.path` 或视频封面的 `media.cover_path`。`inlined` 只代表工具发出，不保证宿主展示。
 
 path 什么时候出现：图片与视频封面内联时只给字节，不落盘也不给 path；只有三种情况会落盘并回填路径——长截图切段（整图存 media.path）、内联体积预算超出、传了 extract_media。视频的 mp4 若本机存在，path 一直指向原文件。
 
@@ -118,7 +118,7 @@ path 什么时候出现：图片与视频封面内联时只给字节，不落盘
 | 想放到指定目录 | output_dir 传绝对路径，该目录不参与自动清理 |
 | 默认导出目录 | exports/run-<进程号>-<启动时间>/，12 小时后自动清理 |
 
-output="file" 时工具自己一次扫完再落盘，不用外面写循环：每张会话表只读一遍、按时间顺序流式产出，多会话用堆归并，所以几十万条的大群也只要几秒（实测 30.2 万条的群 6.5 秒）。返回的 export 里有 rows、bytes、format、columns、is_partial、basis 与 tables。
+消息 `output="file"` 单遍扫表，不返回分页预览。读 `export.files` 的全部分片和 `export.coverage.path`。回执把目标分成 `complete`、`empty`、`unresolved`、`read_error`、`partial`；`coverage.is_complete` 为假时说明缺口，不能把未查到的群算作未回。`is_partial` 只表示超过 20 万行上限，可按日期或群 ID 分批。`auto_export` 只是当前页，仍受页数及每目标上限影响。
 
 导出固定用 full 档，lite 会被升级，否则 CSV 里没有 chat_name 与 type。结果里还有别的集合（例如 activity 的 by_hour、by_type、top_senders）时，会另存一份 extra JSON 并给 extra_collections，不会只导主表把旁挂数据丢掉。
 
@@ -149,9 +149,16 @@ output="file" 时工具自己一次扫完再落盘，不用外面写循环：每
 
 ### 6.2 写脚本（量大或需要精确聚合）
 
-项目目录下有与 MCP 同参的 CLI，也可以直接在 Python 里调 service 层。
+在仓库根目录执行 `uv run python -m src.cli`。Windows 已有环境可直接用 `.venv/Scripts/python.exe -m src.cli`。在其他项目工作时切换命令的工作目录到本仓库，导出位置用绝对路径。`--root` 指定已有固定副本，`--no-fresh` 显式关闭刷新。副本保护见 [DSH运行手册](../USAGE-DSH.md#五cli与-mcp-同参)。完整参数随子命令 `--help`。
 
-命令行入口是 python -m src.cli（没有装出来的可执行文件）。默认输出 NDJSON，一行一个对象；加 --json 出紧凑信封，--pretty 缩进，--format text 或 md 出人读文本。
+| 场景 | 推荐做法 |
+|---|---|
+| 按人找招募群 | `groups --members 甲 乙 --limit 1000 --json` 默认求交集，`--any-member` 求并集。检查 `unresolved` 和 `has_more`，`groups` 没有游标，数量不足就调高 `--limit`。当前成员只给候选名单；已知历史群 ID 单独补入。 |
+| 多群每日取数 | `export --targets 12345678@chatroom 87654321@chatroom --start 2026-11-20 --end 2026-11-21 --format ndjson --no-media --out exports/daily`。读全部 `files`，按 `chat_id` 关联名单，查 `coverage.path` 对账。 |
+| 搜索与读消息 | `search 关键词 --scope message --since 2026-11-20 --json` 找线索；`messages --targets 12345678@chatroom --types system transfer --json` 核对事件。`messages` 是一页，续页原样传 `next` 给 `--cursor`。 |
+| 统计成交、换口径 | 保留一群一行的事件明细，记录群 ID、可见拉群时间、成交时间、证据种类与匹配状态。用精确时间戳算 `截止时间减拉群时间 >= 72小时`，同一天拉的群也可能分在两侧。每天取新消息时和旧底表合并；盘历史拉群时间应往前查，窗口内首条消息不能直接当拉群事件。 |
+
+`messages` 默认一页 NDJSON；脚本需要检查该页元数据时用 `--json`。`export` 直接落文件，stdout 是 JSON 回执。筛选和统计用 NDJSON，截图和语音单独核读。
 
 ```text
 python -m src.cli messages --targets 某群 --limit 100
@@ -161,9 +168,11 @@ python -m src.cli list --scope group --sort members --limit 20 --json
 python -m src.cli groups --members 甲 乙 --json
 python -m src.cli rel --kind group_members --subject 某群 --json
 python -m src.cli search 合同 --limit 20 --json
-python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out 某目录
+python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --format md --out exports/mine
+python -m src.cli status --json
+```
 
-导出会自动把媒体落成真实文件，不走内联（AI 拿到的是路径，不是字节）：
+导出默认把媒体落成真实文件，不走内联（AI 拿到的是路径，不是字节）：
 
 | 类型 | 落盘位置 | 说明 |
 |---|---|---|
@@ -174,9 +183,7 @@ python -m src.cli export --targets 某群 --start 2025-01-01 --end 2025-12-31 --
 
 media.path 在导出的每一行里都指向副本路径，能直接读；拿不到时同位置给 missing_reason（no_local_image、no_local_file、no_local_video、decode_failed、media_limit_reached 等）。
 
-默认最多存 500 个，--media-limit 改数量（0 表示不限），--no-media 完全关掉。返回值里的 media_export 给 dir、images、voice、video_covers、video_files、files、saved、skipped、missing、limit。
-python -m src.cli status --json
-```
+默认最多存 500 个，`--media-limit` 改数量（0 表示不限），`--no-media` 不提取媒体。返回的 `media_export` 另列保存、跳过与失败原因。
 
 Python 编排：
 
@@ -207,9 +214,7 @@ for gid in groups:
 
 ### 6.3 更深的编排
 
-如果要做跨月聚合、逐人画像、批量导出这类活，不要用 MCP 工具一轮轮调（慢且吃 token），直接在项目里写脚本：读 decrypted/ 下的明文库，或用 service 层。
-
-项目里的 src/messages.py 与 src/export.py 就是按这种思路写的，可以照抄结构。
+默认让 CLI 或共用 Service 负责读取微信，脚本只读导出文件做聚合。封装缺少必要字段或口径时，可以只读直查 SQLite；先用相同 ID、时间窗和类型对拍，写明为何切换、哪些记录不在同一口径。FTS 索引适合找线索，不用它替代完整会话；当前成员关系无法证明历史拉群范围。
 
 ## 七、CLI 速查
 
